@@ -47,7 +47,9 @@ from core.admin.controller.admin_controller import (
     admin_routes,
     owner_resource_routes,
     public_ads_routes,
+    public_automation_routes,
 )
+from core.ai_workflow.controller.ai_workflow_controller import ai_workflow_routes
 from core.embed.controller.embed_controller import embed_routes, portal_embed_routes
 
 from utilities.dbconfig import Base, engine
@@ -361,6 +363,7 @@ app.include_router(webhooks_routes, prefix="/api/v1/webhooks", tags=["Webhooks R
 app.include_router(nlu_routes, prefix="/api/v1/nlu", tags=["NLU Routes"])
 app.include_router(paystack_routes, prefix="/api/v1/paystack", tags=["Paystack Routes"])
 app.include_router(agent_routes, prefix="/api/v1/agent", tags=["Agent Routes"])
+app.include_router(agent_routes, prefix="/api/v1/agents", tags=["Agent Routes (portal)"])
 app.include_router(media_routes, prefix="/api/v1/media", tags=["Media Generation"])
 app.include_router(social_routes, prefix="/api/v1/social", tags=["Social Media Routes"])
 app.include_router(whatsapp_routes, prefix="/api/v1/whatsapp", tags=["WhatsApp Meta Routes"])
@@ -377,6 +380,8 @@ app.include_router(intervention_routes, prefix="/api/v1/interventions", tags=["I
 app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["Conversation Routes"])
 app.include_router(intelligence_routes, prefix="/api/v1/intelligence", tags=["Intelligence / My AI"])
 app.include_router(admin_routes, prefix="/api/v1/admin", tags=["Platform Admin"])
+app.include_router(ai_workflow_routes, prefix="/api/v1/admin/ai-workflows", tags=["AI Workflows"])
+app.include_router(public_automation_routes, prefix="/api/v1", tags=["Automation Requests (Portal)"])
 app.include_router(public_ads_routes, prefix="/api/v1/ads", tags=["Platform Ads"])
 app.include_router(owner_resource_routes, prefix="/api/v1/resources", tags=["Owner Resources"])
 app.include_router(portal_embed_routes, prefix="/api/v1/embed/portal", tags=["Embedded chat (portal)"])

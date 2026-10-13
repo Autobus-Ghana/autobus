@@ -30,11 +30,19 @@ from core.admin.dto.admin_dto import (
 from core.admin.service.admin_service import AdminService
 from core.auth.dependencies import get_current_user, get_db, require_admin, require_super_admin
 from core.admin.service.owner_resource_service import OwnerResourceService
+from core.admin.dto.automation_request_dto import (
+    AutomationRequestResponse,
+    CreateAutomationRequestPayload,
+    PortalSurveySubmitRequest,
+    UpdateAutomationRequestStatusPayload,
+)
+from core.admin.service.automation_request_service import AutomationRequestService
 from core.user.model.User import User
 
 admin_routes = APIRouter()
 public_ads_routes = APIRouter()
 owner_resource_routes = APIRouter()
+public_automation_routes = APIRouter()
 
 
 @admin_routes.post("/auth/signin", response_model=AdminAuthResponse)
@@ -403,3 +411,78 @@ def owner_resource_feed(
     db: Session = Depends(get_db),
 ):
     return OwnerResourceService(db).feed_for(user)
+
+
+# ---------------------------------------------------------------------------
+# Automation Requests & Portal Survey Endpoints
+# ---------------------------------------------------------------------------
+
+@admin_routes.get("/automation-requests", response_model=List[AutomationRequestResponse])
+def list_automation_requests(
+    q: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AutomationRequestService(db).list_all(q=q, status_filter=status, category=category)
+
+
+@admin_routes.post("/automation-requests", response_model=AutomationRequestResponse)
+def create_automation_request(
+    payload: CreateAutomationRequestPayload,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return AutomationRequestService(db).create(payload, user=admin)
+
+
+@admin_routes.get("/automation-requests/{request_id}", response_model=AutomationRequestResponse)
+def get_automation_request(
+    request_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AutomationRequestService(db).get_by_id(request_id)
+
+
+@admin_routes.patch("/automation-requests/{request_id}/status", response_model=AutomationRequestResponse)
+def update_automation_request_status(
+    request_id: str,
+    payload: UpdateAutomationRequestStatusPayload,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AutomationRequestService(db).update_status(request_id, payload.status)
+
+
+@admin_routes.delete("/automation-requests/{request_id}")
+def delete_automation_request(
+    request_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AutomationRequestService(db).delete(request_id)
+
+
+# Public / Portal Survey submission endpoints
+@public_automation_routes.post("/automation-requests", response_model=AutomationRequestResponse)
+def submit_portal_automation_request(
+    payload: CreateAutomationRequestPayload,
+    db: Session = Depends(get_db),
+):
+    """Allows merchants or portal visitors to submit automation requests or survey responses."""
+    return AutomationRequestService(db).create(payload)
+
+
+@public_automation_routes.post("/automation-requests/survey", response_model=AutomationRequestResponse)
+def submit_portal_survey(
+    payload: PortalSurveySubmitRequest,
+    db: Session = Depends(get_db),
+):
+    """Direct portal survey submission endpoint that stores responses in the database."""
+    return AutomationRequestService(db).submit_portal_survey(payload)

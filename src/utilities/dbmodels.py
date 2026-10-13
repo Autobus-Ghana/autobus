@@ -48,7 +48,8 @@ _model_modules = [
 	"core.product.model.product",
 	"core.orders.model.order",
 	"core.embed.model.embed",
- 
+	"core.ai_workflow.model.ai_workflow",
+	"core.admin.model.automation_request",
 ]
 
 
