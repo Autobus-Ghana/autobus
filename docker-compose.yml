@@ -228,6 +228,11 @@ services:
       # Optional: public origin of this API for Meta crawlers (Instagram publish) and webhook hints.
       AUTOBUS_PUBLIC_API_URL: ${AUTOBUS_PUBLIC_API_URL:-https://api.useautobus.com}
 
+      # Self-hosted n8n (/var/www/n8n) on the shared caddy network; admin workflow builder only.
+      N8N_BASE_URL: ${N8N_BASE_URL:-http://n8n:5678}
+      N8N_API_KEY: ${N8N_API_KEY:-}
+      N8N_PUBLIC_URL: ${N8N_PUBLIC_URL:-https://n8n.useautobus.com}
+
       # Meta WhatsApp Cloud API (webhook verify + outbound send / media)
       META_API_KEY: ${META_API_KEY:-}
       META_APP_SECRET: ${META_APP_SECRET:-}

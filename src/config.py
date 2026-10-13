@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     BLOTATO_API_BASE: str = os.environ.get('BLOTATO_API_BASE', 'https://api.blotato.com')
     BLOTATO_OAUTH_BASE: str = os.environ.get('BLOTATO_OAUTH_BASE', 'https://app.blotato.com')
     
+    # Self-hosted n8n workflow engine (admin portal builder). The API key never leaves the backend.
+    N8N_BASE_URL: str = os.environ.get("N8N_BASE_URL", "http://n8n:5678").strip().rstrip("/")
+    N8N_API_KEY: str = os.environ.get("N8N_API_KEY", "").strip()
+    N8N_PUBLIC_URL: str = os.environ.get("N8N_PUBLIC_URL", "https://n8n.useautobus.com").strip().rstrip("/")
+
     # OTP Configuration
     # Prefer OTP_EXPIRE_SECONDS; if unset, honor OTP_EXPIRE_MINUTES (compose default 5).
     # Fallback is 5 minutes — 30s was too short for SMS delivery + user entry.

@@ -49,6 +49,7 @@ from core.admin.controller.admin_controller import (
     public_ads_routes,
 )
 from core.embed.controller.embed_controller import embed_routes, portal_embed_routes
+from core.n8n.controller.n8n_controller import n8n_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -376,6 +377,7 @@ app.include_router(order_routes, prefix="/api/v1/orders", tags=["Order Routes"])
 app.include_router(intervention_routes, prefix="/api/v1/interventions", tags=["Interventions Routes"])
 app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["Conversation Routes"])
 app.include_router(intelligence_routes, prefix="/api/v1/intelligence", tags=["Intelligence / My AI"])
+app.include_router(n8n_routes, prefix="/api/v1/admin/n8n", tags=["Platform Admin – n8n"])
 app.include_router(admin_routes, prefix="/api/v1/admin", tags=["Platform Admin"])
 app.include_router(public_ads_routes, prefix="/api/v1/ads", tags=["Platform Ads"])
 app.include_router(owner_resource_routes, prefix="/api/v1/resources", tags=["Owner Resources"])
