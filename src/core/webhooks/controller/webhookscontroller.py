@@ -560,35 +560,15 @@ async def start_dialog(
 
 
 def _ig_message_text(message: Any) -> str:
-    if not isinstance(message, dict):
-        return str(message or "").strip()
-    if message.get("is_echo"):
-        return ""
-    text = message.get("text")
-    if isinstance(text, dict):
-        return str(text.get("body") or text.get("text") or "").strip()
-    if text:
-        return str(text).strip()
-    return ""
+    from core.webhooks.instagram_inbound import ig_message_text
+
+    return ig_message_text(message)
 
 
 def _ig_image_url(message: Any) -> str:
-    """First image attachment URL on an Instagram messaging event."""
-    if not isinstance(message, dict):
-        return ""
-    attachments = message.get("attachments") or []
-    if isinstance(attachments, dict):
-        attachments = [attachments]
-    for attachment in attachments:
-        if not isinstance(attachment, dict):
-            continue
-        if str(attachment.get("type") or "").lower() not in {"image", "story_mention"}:
-            continue
-        payload = attachment.get("payload") if isinstance(attachment.get("payload"), dict) else {}
-        url = str(payload.get("url") or attachment.get("url") or "").strip()
-        if url:
-            return url
-    return ""
+    from core.webhooks.instagram_inbound import ig_image_url
+
+    return ig_image_url(message)
 
 
 def _remember_customer_identity(

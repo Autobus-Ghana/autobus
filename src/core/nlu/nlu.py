@@ -27,18 +27,19 @@ from core.nlu.service.customer_shop import (
     catalog_items_from_products,
     classify_customer_shop_intent,
     format_customer_catalog,
+    extract_stated_location,
+    is_clear_product_subject,
     is_questionish_product_name,
     is_shop_cancel,
-    looks_like_existing_order_question,
     is_shop_thanks,
-    extract_product_query_name,
-    leftover_is_generic_catalog_query,
-    looks_like_catalog_browse,
+    looks_like_delivery_question,
+    looks_like_existing_order_question,
     looks_like_faq,
-    looks_like_generic_stock_inquiry,
+    looks_like_location_statement,
     looks_like_order_request,
     looks_like_product_or_order_utterance,
     resolve_catalog_query,
+    scrub_non_product_slots,
 )
 from core.product.service.image_fingerprint import find_match_code
 from core.product.service.image_match import (
@@ -692,6 +693,21 @@ class AutobusNLUSystem:
         )
         return any(n in t for n in needles)
 
+    @staticmethod
+    def _drop_unclear_product_slots(collected_slots: Dict[str, Any]) -> None:
+        """A product slot must be the product subject. Anything else is asked again."""
+        if not isinstance(collected_slots, dict):
+            return
+        unclear = False
+        for key in ("item_name", "product_name"):
+            value = str(collected_slots.get(key) or "").strip()
+            if value and not is_clear_product_subject(value):
+                collected_slots.pop(key, None)
+                unclear = True
+        if unclear:
+            for key in ("product_id", "unit_price", "item_candidates"):
+                collected_slots.pop(key, None)
+
     def _apply_create_order_slot_hygiene(
         self,
         *,
@@ -1117,6 +1133,45 @@ class AutobusNLUSystem:
                 intent = "view_products"
                 extracted_slots = {}
                 missing_slots = []
+            if not image_override and looks_like_delivery_question(user_message):
+                # "Can you deliver to my location" is not a product search.
+                intent = "business_conversation"
+                extracted_slots = {}
+                missing_slots = []
+            elif not image_override and looks_like_location_statement(user_message) and not looks_like_order_request(user_message):
+                # "Im at adenta" names a place. Keep it off item_name / product_name.
+                place = extract_stated_location(user_message)
+                if (state.current_intent or "").strip() == "create_order" or intent == "create_order":
+                    intent = "create_order"
+                    extracted_slots = {"customer_location": place} if place else {}
+                    missing_slots = []
+                else:
+                    intent = "business_conversation"
+                    extracted_slots = {}
+                    missing_slots = []
+            elif not image_override:
+                extracted_slots = scrub_non_product_slots(extracted_slots, user_message or "")
+            if (
+                not image_override
+                and (media_context.get("image_base64") or media_context.get("image_url"))
+                and intent == "cannot_process_image"
+                and photo_should_identify_product(user_message, customer_catalog)
+                and not looks_like_delivery_question(user_message)
+                and not looks_like_location_statement(user_message)
+            ):
+                # The photo did not match a listed item and the model could not
+                # describe it. Ask which product it is. Never say we can't read images.
+                logger.info(
+                    "Customer photo for %s did not match; asking which product",
+                    user_id,
+                )
+                intent = "view_products"
+                extracted_slots = {
+                    "catalog_heading": (
+                        "I couldn't match that photo to one item. Which of these is it?"
+                    )
+                }
+                missing_slots = []
             logger.info(
                 "Customer session %s: LLM intent=%s slots=%s",
                 user_id,
@@ -1219,6 +1274,8 @@ class AutobusNLUSystem:
 
         previous_intent = (state.current_intent or "").strip()
         state.collected_slots.update(validated_slots)
+        if merchant_id:
+            self._drop_unclear_product_slots(state.collected_slots)
         self._apply_create_order_slot_hygiene(
             previous_intent=previous_intent,
             intent=intent,
@@ -1326,22 +1383,10 @@ class AutobusNLUSystem:
                     currency=currency_from_user_data(self._get_user_data(user_id)),
                 )
                 candidates = state.collected_slots.get("item_candidates")
-                guessed = extract_product_query_name(user_message) or (user_message or "").strip()
                 if candidates:
                     prompt = f"A couple of those match. Which one do you want: {candidates}?"
-                elif (
-                    guessed
-                    and not looks_like_order_request(user_message)
-                    and not looks_like_catalog_browse(user_message)
-                    and not looks_like_generic_stock_inquiry(user_message, customer_catalog)
-                    and not leftover_is_generic_catalog_query(guessed)
-                    and not resolve_catalog_query(guessed, customer_catalog)
-                ):
-                    prompt = (
-                        f'I don\'t have "{guessed}" on the shelf right now.\n\n'
-                        f"{catalog_text}"
-                    )
                 else:
+                    # Product slot is empty. Ask which item — never search the raw message.
                     prompt = f"{prompt}\n\n{catalog_text}"
             if merchant_id and intent in CUSTOMER_SHOP_INTENTS:
                 response = prompt

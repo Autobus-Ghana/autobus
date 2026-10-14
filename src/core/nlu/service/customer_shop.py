@@ -509,6 +509,33 @@ def mentioned_size(text: str) -> str:
     return match.group(1) if match else ""
 
 
+_LOCATION_STATEMENT_RE = re.compile(
+    r"^(?:i(?:'m| am|m)|we(?:'re| are))(?:\s+(?:currently|now|just|actually|still))?\s+(?:at|in|near|around)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_location_statement(text: str) -> bool:
+    """True when the customer is saying where they are, not naming a product."""
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    return _LOCATION_STATEMENT_RE.search(t) is not None
+
+
+def extract_stated_location(text: str) -> str:
+    """Place named in 'I'm at Adenta' / 'Im at adenta'. Empty when it isn't a location."""
+    match = re.match(
+        r"^(?:i(?:'m| am|m)|we(?:'re| are))(?:\s+(?:currently|now|just|actually|still))?\s+(?:at|in|near|around)\s+(.+)$",
+        (text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    place = match.group(1).strip(" ?!.,")
+    return place if len(place) >= 2 else ""
+
+
 def looks_like_order_request(text: str) -> bool:
     t = normalize_shop_text(text)
     if not t:
@@ -603,6 +630,29 @@ def looks_like_buy_named_item(text: str, catalog: Sequence[CatalogItem]) -> bool
     if any(t.startswith(s) for s in starters):
         return True
     return bool(extract_quantity(text, catalog) and match_catalog_in_text(text, catalog))
+
+
+def looks_like_delivery_question(text: str) -> bool:
+    """True for 'can you deliver to my location' — not a product and not an existing order."""
+    t = normalize_shop_text(text)
+    if not t or looks_like_existing_order_question(text) or looks_like_order_request(text):
+        return False
+    phrases = (
+        "can you deliver",
+        "do you deliver",
+        "will you deliver",
+        "could you deliver",
+        "would you deliver",
+        "deliver to my",
+        "deliver to me",
+        "delivery to my",
+        "delivery to me",
+        "do you do delivery",
+        "do you offer delivery",
+        "can i get it delivered",
+        "can you send it to my",
+    )
+    return any(phrase in t for phrase in phrases)
 
 
 def looks_like_faq(text: str) -> bool:
@@ -811,6 +861,61 @@ def extract_product_query_name(text: str) -> str:
     return cleaned
 
 
+def is_clear_product_subject(name: str) -> bool:
+    """True only when a slot value is the product itself, not the customer's sentence.
+
+    Location lines, delivery questions, and whole utterances are not products.
+    Catalog search must use this subject and must not fall back to the raw message.
+    """
+    raw = (name or "").strip()
+    normalized = normalize_shop_text(raw)
+    if not normalized or _is_placeholder_item_name(normalized):
+        return False
+    if is_questionish_product_name(raw):
+        return False
+    if looks_like_location_statement(raw) or looks_like_delivery_question(raw):
+        return False
+    if any(
+        marker in normalized
+        for marker in ("im at ", "i'm at ", "i am at ", "my location", "deliver to")
+    ):
+        return False
+    if looks_like_order_request(raw):
+        subject = normalize_shop_text(extract_product_query_name(raw))
+        if subject != normalized:
+            return False
+    if len(normalized.split()) > 8:
+        return False
+    return True
+
+
+def scrub_non_product_slots(
+    slots: Optional[Dict[str, Any]], user_message: str
+) -> Dict[str, Any]:
+    """Drop product slots the model copied from a sentence that does not name a product."""
+    cleaned = dict(slots or {})
+    location_only = looks_like_location_statement(user_message) and not looks_like_order_request(
+        user_message
+    )
+    if location_only or looks_like_delivery_question(user_message):
+        for key in ("item_name", "product_name", "product_id", "unit_price", "item_candidates"):
+            cleaned.pop(key, None)
+        if location_only:
+            place = extract_stated_location(user_message)
+            if place:
+                cleaned["customer_location"] = place
+        return cleaned
+    for key in ("item_name", "product_name"):
+        value = str(cleaned.get(key) or "").strip()
+        if value and not is_clear_product_subject(value):
+            cleaned.pop(key, None)
+            if key == "item_name":
+                cleaned.pop("product_id", None)
+                cleaned.pop("unit_price", None)
+                cleaned.pop("item_candidates", None)
+    return cleaned
+
+
 def classify_customer_shop_intent(
     user_message: str,
     *,
@@ -831,6 +936,16 @@ def classify_customer_shop_intent(
 
     if is_shop_thanks(text):
         return "goodbye", {}, []
+
+    # Delivery and location are not products. Never scan the sentence for a catalog hit.
+    if looks_like_delivery_question(text):
+        return "business_conversation", {}, []
+
+    if looks_like_location_statement(text) and not looks_like_order_request(text):
+        if current == "create_order":
+            place = extract_stated_location(text)
+            return "create_order", ({"customer_location": place} if place else {}), []
+        return "business_conversation", {}, []
 
     if (
         looks_like_faq(text)
@@ -866,7 +981,7 @@ def classify_customer_shop_intent(
             return "view_products", {}, []
         if not view_slots and not mentioned:
             guessed = extract_product_query_name(text)
-            if guessed and not leftover_is_generic_catalog_query(guessed):
+            if guessed and is_clear_product_subject(guessed):
                 return "view_product", {"product_name": guessed}, []
             return "view_products", {}, []
         return "view_product", view_slots, []
@@ -899,7 +1014,12 @@ def _order_slots_from_message(
         slots["product_id"] = item.product_id
     elif len(matches) > 1:
         slots["item_candidates"] = ", ".join(item.name for item in matches)
-    elif leftover and not leftover_is_generic_catalog_query(leftover) and not is_shop_thanks(text):
+    elif (
+        leftover
+        and is_clear_product_subject(leftover)
+        and not leftover_is_generic_catalog_query(leftover)
+        and not is_shop_thanks(text)
+    ):
         slots["item_name"] = leftover
     return slots
 
@@ -914,7 +1034,7 @@ def _view_slots_from_message(
         if leftover_matches:
             matches = leftover_matches
     if not matches:
-        if leftover and not leftover_is_generic_catalog_query(leftover):
+        if leftover and is_clear_product_subject(leftover) and not leftover_is_generic_catalog_query(leftover):
             return {"product_name": leftover}
         return {}
     if len(matches) == 1:

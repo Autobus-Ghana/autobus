@@ -271,6 +271,11 @@ class LLMClient:
             text = (response or "").strip()
             if not text or "not_a_product" in text.lower():
                 return None
+            from core.product.service.image_match import is_vision_refusal
+
+            if is_vision_refusal(text):
+                logger.info("Product image description was a vision refusal; ignoring it")
+                return None
             return text
         except Exception as e:
             logger.error(f"Error describing product image: {e}")

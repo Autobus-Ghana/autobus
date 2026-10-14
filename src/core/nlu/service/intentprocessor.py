@@ -20,6 +20,7 @@ from core.nlu.service.customer_shop import (
     catalog_items_from_products,
     format_customer_catalog,
     format_customer_product,
+    is_clear_product_subject,
     mentioned_size,
     resolve_catalog_query,
 )
@@ -839,8 +840,10 @@ class IntentProcessor:
                 product_service, owner_id, user_id, limit=50, category=category
             )
             self._queue_product_images(products, product_service, per_product=1, total_limit=4)
+            heading = str((slots or {}).get("catalog_heading") or "").strip() or None
             listing = format_customer_catalog(
                 catalog_items_from_products(products),
+                heading=heading,
                 currency=self._catalog_currency(user_data),
             )
             return self._append_size_note(listing, user_message, products)
@@ -881,6 +884,21 @@ class IntentProcessor:
         is_customer = self._is_customer_session(user_data)
         owner_id = self._catalog_owner_id(user_id, user_data)
 
+        product = None
+        unclear_subject = bool(
+            is_customer
+            and product_name
+            and not product_id
+            and not is_clear_product_subject(str(product_name))
+        )
+        if unclear_subject:
+            owned = self._owned_products(product_service, owner_id, user_id, limit=50)
+            self._queue_product_images(owned, product_service, per_product=1, total_limit=4)
+            listing = format_customer_catalog(
+                catalog_items_from_products(owned),
+                currency=self._catalog_currency(user_data),
+            )
+            return f"Which one are you asking about?\n\n{listing}"
         product = self._find_product(product_service, slots, user_id=owner_id)
         if not product and product_name:
             matches = product_service.find_products_for_user(str(product_name), owner_id)
@@ -1046,6 +1064,13 @@ class IntentProcessor:
                 product_service.get_products_by_user(owner_id, skip=0, limit=limit),
                 sub_business_id,
             )
+
+        if is_customer and not is_clear_product_subject(str(item_name)):
+            listing = format_customer_catalog(
+                catalog_items_from_products(_owned(50)),
+                currency=self._catalog_currency(user_data),
+            )
+            return f"Which one would you like?\n\n{listing}"
 
         matches = []
         product_id = slots.get("product_id")

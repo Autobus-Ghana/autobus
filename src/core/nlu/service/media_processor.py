@@ -8,6 +8,15 @@ from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
+# Instagram's lookaside CDN refuses downloads that do not look like a browser.
+_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/jpeg,image/png,image/*,*/*;q=0.8",
+}
+
 
 class MediaProcessor:
     """Service for processing media files from WhatsApp (images, audio)"""
@@ -114,7 +123,9 @@ class MediaProcessor:
                     return None
                 media_bytes, mime_type, _ = result
             
-            # Validate it's an image
+            coerced = self._coerce_image_bytes(media_bytes)
+            if coerced:
+                media_bytes, mime_type = coerced
             if mime_type not in self.supported_images:
                 logger.warning(f"Unsupported image type: {mime_type}")
                 return None
@@ -185,9 +196,9 @@ class MediaProcessor:
             return None
     
     def _download_from_url(self, url: str) -> Optional[bytes]:
-        """Download file from URL"""
+        """Download file from URL. Instagram CDN links need a browser user agent."""
         try:
-            headers = {}
+            headers = dict(_FETCH_HEADERS)
             params = None
             # If downloading from Graph endpoints, include token
             if self.meta_api_key and ("graph.instagram.com" in url or "graph.facebook.com" in url):
@@ -196,10 +207,31 @@ class MediaProcessor:
             response = requests.get(url, headers=headers, params=params, timeout=30)
             response.raise_for_status()
             return response.content
-            
+
         except Exception as e:
             logger.error(f"Error downloading from URL: {e}")
             return None
+
+    def _coerce_image_bytes(self, data: bytes) -> Optional[Tuple[bytes, str]]:
+        """Return JPEG/PNG/GIF/WEBP bytes, converting phone formats Pillow can open."""
+        if not data:
+            return None
+        mime_type = self._detect_mime_type_from_bytes(data)
+        if mime_type in self.supported_images:
+            return data, mime_type
+        try:
+            from PIL import Image
+
+            image = Image.open(BytesIO(data))
+            image = image.convert("RGB")
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=85)
+            jpeg = output.getvalue()
+            if jpeg:
+                return jpeg, "image/jpeg"
+        except Exception as exc:
+            logger.warning("Could not decode image bytes: %s", exc)
+        return None
     
     def _detect_mime_type_from_bytes(self, data: bytes) -> str:
         """Detect MIME type from file bytes"""

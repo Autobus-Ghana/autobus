@@ -28,6 +28,41 @@ class MatchDecision:
         return self.kind in {"exact", "related"} and bool(self.hits)
 
 
+def is_vision_refusal(text: str) -> bool:
+    """True when a model says it cannot see the photo, rather than describing it."""
+    low = (text or "").lower()
+    if not low.strip():
+        return False
+    needles = (
+        "can't read",
+        "cannot read",
+        "cant read",
+        "unable to read",
+        "can't view",
+        "cannot view",
+        "cant view",
+        "can't process image",
+        "cannot process image",
+        "unable to process image",
+        "can't process the image",
+        "cannot process the image",
+        "do not have the ability to view",
+        "don't have the ability to view",
+        "not able to process image",
+        "not able to view",
+        "cannot access the image",
+        "can't access the image",
+        "unable to access the image",
+        "image is not visible",
+        "no image provided",
+        "cannot see the image",
+        "can't see the image",
+        "cannot see images",
+        "can't see images",
+    )
+    return any(needle in low for needle in needles)
+
+
 def photo_should_identify_product(user_message: str, catalog: Sequence) -> bool:
     """True when the photo is the thing the customer is asking about."""
     from core.nlu.service.customer_shop import (

@@ -5,6 +5,7 @@ from core.nlu.service.customer_shop import (
     classify_customer_shop_intent,
     extract_product_query_name,
     extract_quantity,
+    is_clear_product_subject,
     is_questionish_product_name,
     looks_like_existing_order_question,
     mentioned_size,
@@ -101,6 +102,55 @@ class ExistingOrderQuestionTests(unittest.TestCase):
         text = format_customer_catalog([_item("Naa")])
         self.assertIn("Here's what we've got", text)
         self.assertIn("how many", text.lower())
+
+
+class LocationAndDeliveryAreNotProductsTests(unittest.TestCase):
+    def test_whereabouts_is_not_a_product_subject(self):
+        self.assertFalse(is_clear_product_subject("Im at adenta"))
+        self.assertTrue(is_clear_product_subject("mango juice"))
+        self.assertFalse(is_clear_product_subject("Can you deliver to my location"))
+
+    def test_delivery_question_is_not_a_product_search(self):
+        catalog = [_item("Mango Juice", "mj"), _item("Adenta Bread", "ab")]
+        intent, slots, _ = classify_customer_shop_intent(
+            "Can you deliver to my location",
+            catalog=catalog,
+            current_intent="create_order",
+        )
+        self.assertEqual(intent, "business_conversation")
+        self.assertNotIn("item_name", slots)
+        self.assertNotIn("product_name", slots)
+
+    def test_location_follow_up_does_not_become_the_item(self):
+        catalog = [_item("Mango Juice", "mj"), _item("Adenta Bread", "ab")]
+        intent, slots, _ = classify_customer_shop_intent(
+            "Im at adenta",
+            catalog=catalog,
+            current_intent="create_order",
+        )
+        self.assertEqual(intent, "create_order")
+        self.assertEqual(slots.get("customer_location"), "adenta")
+        self.assertNotIn("item_name", slots)
+        self.assertNotIn("product_name", slots)
+
+    def test_location_outside_an_order_is_not_a_catalog_lookup(self):
+        catalog = [_item("Adenta Bread", "ab")]
+        intent, slots, _ = classify_customer_shop_intent(
+            "Im at adenta",
+            catalog=catalog,
+        )
+        self.assertEqual(intent, "business_conversation")
+        self.assertEqual(slots, {})
+
+    def test_unclear_sentence_is_not_stored_as_the_product(self):
+        from core.nlu.service.customer_shop import scrub_non_product_slots
+
+        slots = scrub_non_product_slots(
+            {"item_name": "Im at adenta", "quantity": "1"},
+            "Im at adenta",
+        )
+        self.assertNotIn("item_name", slots)
+        self.assertEqual(slots.get("customer_location"), "adenta")
 
 
 if __name__ == "__main__":

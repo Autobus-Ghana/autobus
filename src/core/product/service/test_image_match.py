@@ -125,6 +125,23 @@ class CustomerImageIntentTests(unittest.TestCase):
         self.assertEqual(slots["related_product_ids"], "p1,p2")
         self.assertIn("closest", slots["image_match_heading"].lower())
 
+    def test_availability_caption_uses_the_photo(self):
+        intent, slots, _missing = customer_image_intent(
+            "is this available?",
+            self.catalog,
+            self.exact,
+        )
+        self.assertEqual(intent, "view_product")
+        self.assertEqual(slots["product_id"], "p1")
+        self.assertEqual(slots["product_name"], "Mango Juice")
+
+    def test_vision_refusal_is_not_a_product_description(self):
+        from core.product.service.image_match import is_vision_refusal
+
+        self.assertTrue(is_vision_refusal("I can't read images"))
+        self.assertTrue(is_vision_refusal("Sorry, I cannot view the image you sent."))
+        self.assertFalse(is_vision_refusal("red leather handbag, gold hardware"))
+
     def test_named_product_and_faq_are_left_to_the_text(self):
         self.assertIsNone(
             customer_image_intent("I want mango juice", self.catalog, self.exact)

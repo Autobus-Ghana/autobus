@@ -181,24 +181,13 @@ class IntentDetector:
             logger.debug("Intent detection response text (truncated): %s", (response_text or '')[:1000])
 
             # Detect if model refused or reported inability to process images
-            refusal_phrases = [
-                "unable to process images",
-                "i'm unable to process",
-                "cannot process images",
-                "can't process images",
-                "cannot access the image",
-                "cannot view the image",
-                "can't view images",
-                "do not have the ability to view images",
-                "i cannot process images",
-                "i can't process images",
-                "i'm not able to process images"
-            ]
-            if response_text and not photo_description:
-                low = response_text.lower()
-                if any(p in low for p in refusal_phrases) or "cannot_process_image" in low or "cannot_process_image" in (response_text or ""):
-                    logger.info("Model reported it cannot process images; returning special intent")
-                    return "cannot_process_image", {}, []
+            from core.product.service.image_match import is_vision_refusal
+
+            if response_text and (
+                is_vision_refusal(response_text) or "cannot_process_image" in response_text.lower()
+            ):
+                logger.info("Model reported it cannot process images; returning special intent")
+                return "cannot_process_image", {}, []
 
             # Parse the LLM response
             intent, slots, missing_slots = self._parse_response(response_text)
@@ -333,6 +322,9 @@ class IntentDetector:
         - Questions about an order already placed (when will it arrive, did you create it, where is my order, I placed an order yesterday, I asked for 3) are check_order_status. They are never create_order. Do not put that sentence in item_name or product_name.
         - create_order only when they are buying now and give a product and/or a quantity.
         - If CURRENT_INTENT is create_order, keep it only when this message supplies a product name or a purchase quantity. Switch to check_order_status when they are talking about an order they already made.
+        - item_name and product_name must be the product subject only. Never copy the whole message, a location ("I'm at Adenta", "Im at adenta"), or a delivery question ("can you deliver to my location") into those slots. If you cannot tell which product they mean, omit item_name and product_name.
+        - "Can you deliver to my location" and similar delivery questions are business_conversation, unless they are about an order already placed (check_order_status).
+        - "I'm at Adenta" / "Im at adenta" is a place. If CURRENT_INTENT is create_order, put the place in customer_location and leave item_name empty. Otherwise use business_conversation. It is never a product.
         - "Is this available", "do you have this", a size question, or a product photo is view_product. product_name must be the product, not the whole question.
         - "What products are available" or "can you share pictures" is view_products.
         - A line that starts with "Photo shows this product:" describes their picture. Use it as product_name when it matches something they could buy. Ignore watermarks and phone numbers in the photo.
