@@ -25,7 +25,7 @@ from core.product.service.image_match import (
     customer_image_intent,
     photo_should_identify_product,
 )
-from core.product.service.image_to_text import color_name, image_to_text
+from core.product.service.image_to_text import color_name, image_to_text, read_printed_text
 
 
 def _solid(color, size=(240, 240)) -> Image.Image:
@@ -97,6 +97,29 @@ class ImageToTextTests(unittest.TestCase):
         text = image_to_text(jpeg_bytes(_solid((10, 10, 200))), MatchDecision())
         self.assertIn("Catalog match: none", text)
         self.assertIn("blue", text)
+
+    def test_printed_words_are_kept_as_text(self):
+        text = image_to_text(
+            jpeg_bytes(_solid((255, 255, 255))),
+            MatchDecision(),
+            printed="AB-7K2M mango juice",
+        )
+        self.assertIn("Text in the photo: AB-7K2M mango juice", text)
+        self.assertIn("Size:", text)
+
+    def test_tesseract_words_are_returned_for_matching(self):
+        import sys
+        from types import SimpleNamespace
+
+        fake = SimpleNamespace(image_to_string=lambda image: "  AB-7K2M  mango  ")
+        sys.modules["pytesseract"] = fake
+        try:
+            self.assertEqual(
+                read_printed_text(jpeg_bytes(_solid((255, 255, 255)))),
+                "AB-7K2M mango",
+            )
+        finally:
+            sys.modules.pop("pytesseract", None)
 
     def test_unreadable_bytes_are_still_text(self):
         text = image_to_text(b"not-an-image", None)

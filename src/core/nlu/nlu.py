@@ -44,6 +44,7 @@ from core.nlu.service.customer_shop import (
 from core.product.service.image_fingerprint import find_match_code
 from core.product.service.image_match import (
     MatchDecision,
+    MatchHit,
     customer_image_intent,
     photo_should_identify_product,
 )
@@ -51,7 +52,7 @@ from core.product.service.image_match_service import (
     lookup_match_code,
     match_customer_image,
 )
-from core.product.service.image_to_text import image_to_text
+from core.product.service.image_to_text import image_to_text, read_printed_text
 from core.nlu.service.conversation_manager import ConversationManager
 from core.nlu.service.intent_handler_result import IntentHandlerResult
 from core.nlu.service.security import SecurityManager
@@ -1061,12 +1062,48 @@ class AutobusNLUSystem:
         if merchant_id and (media_context.get("image_base64") or media_context.get("image_url")):
             image_bytes = _customer_image_bytes(media_context)
             if image_bytes:
+                ocr_text = read_printed_text(image_bytes)
+                if ocr_text:
+                    logger.info("[IMAGE_OCR] Read %s characters from customer photo", len(ocr_text))
                 image_decision = match_customer_image(
                     merchant_id,
                     image_bytes,
                     allowed_product_ids=[item.product_id for item in customer_catalog],
+                    ocr_text=ocr_text,
                 )
-                python_photo_text = image_to_text(image_bytes, image_decision)
+                if ocr_text and image_decision.kind != "exact":
+                    named = resolve_catalog_query(ocr_text, customer_catalog)
+                    if len(named) == 1:
+                        item = named[0]
+                        image_decision = MatchDecision(
+                            kind="exact",
+                            hits=[
+                                MatchHit(
+                                    item.product_id,
+                                    item.name,
+                                    str(item.price or ""),
+                                    "",
+                                    1.0,
+                                )
+                            ],
+                        )
+                    elif len(named) > 1 and not image_decision.found:
+                        image_decision = MatchDecision(
+                            kind="related",
+                            hits=[
+                                MatchHit(
+                                    item.product_id,
+                                    item.name,
+                                    str(item.price or ""),
+                                    "",
+                                    0.9,
+                                )
+                                for item in named[:4]
+                            ],
+                        )
+                python_photo_text = image_to_text(
+                    image_bytes, image_decision, printed=ocr_text
+                )
                 if python_photo_text:
                     user_message = f"{(user_message or '').rstrip()}\n{python_photo_text}".strip()
                 # The chat model is text-only. It must see the notes above, not the pixels.

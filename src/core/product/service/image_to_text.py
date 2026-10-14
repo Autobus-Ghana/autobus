@@ -7,29 +7,47 @@ as a sentence. No vision model is called.
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional, Sequence, Tuple
 
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 from core.product.service.image_fingerprint import open_image
 from core.product.service.image_match import MatchDecision
 
 
-def image_to_text(image_bytes: bytes, decision: Optional[MatchDecision] = None) -> str:
+def image_to_text(
+    image_bytes: bytes,
+    decision: Optional[MatchDecision] = None,
+    printed: Optional[str] = None,
+) -> str:
     """Plain-text description of a customer photo."""
     lines = ["Photo notes:"]
     image = open_image(image_bytes or b"")
     if image is None:
         lines.append("- The file could not be opened as an image.")
     else:
+        lines.append(f"- Size: {image.width}x{image.height}")
         colors = main_color_names(image)
         if colors:
             lines.append("- Main colors: " + ", ".join(colors))
-        printed = printed_text(image)
+        if printed is None:
+            printed = printed_text(image)
+        printed = " ".join((printed or "").split())
         if printed:
-            lines.append("- Text in the photo: " + printed)
+            lines.append("- Text in the photo: " + printed[:240])
     lines.append("- " + catalog_match_line(decision))
     return "\n".join(lines)
+
+
+def read_printed_text(image_bytes: bytes) -> str:
+    """Words Tesseract can read off the photo. Empty when Tesseract is unavailable."""
+    image = open_image(image_bytes or b"")
+    if image is None:
+        return ""
+    return printed_text(image)
 
 
 def main_color_names(image: Image.Image, limit: int = 2) -> List[str]:
@@ -73,7 +91,8 @@ def printed_text(image: Image.Image) -> str:
         return ""
     try:
         raw = pytesseract.image_to_string(image) or ""
-    except Exception:
+    except Exception as exc:
+        logger.warning("Tesseract could not read the photo: %s", exc)
         return ""
     words = " ".join(raw.split())
     return words[:240]

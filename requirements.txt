@@ -39,6 +39,7 @@ mdurl==0.1.2
 openai==2.2.0
 passlib==1.7.4
 pillow==11.3.0
+pytesseract==0.3.13
 proto-plus==1.26.1
 protobuf==6.32.1
 psycopg2-binary==2.9.10
