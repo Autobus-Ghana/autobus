@@ -51,6 +51,7 @@ from core.product.service.image_match_service import (
     lookup_match_code,
     match_customer_image,
 )
+from core.product.service.image_to_text import image_to_text
 from core.nlu.service.conversation_manager import ConversationManager
 from core.nlu.service.intent_handler_result import IntentHandlerResult
 from core.nlu.service.security import SecurityManager
@@ -1056,6 +1057,7 @@ class AutobusNLUSystem:
         )
         image_decision = MatchDecision()
         detect_media = media_context
+        python_photo_text = ""
         if merchant_id and (media_context.get("image_base64") or media_context.get("image_url")):
             image_bytes = _customer_image_bytes(media_context)
             if image_bytes:
@@ -1064,14 +1066,15 @@ class AutobusNLUSystem:
                     image_bytes,
                     allowed_product_ids=[item.product_id for item in customer_catalog],
                 )
-                if image_decision.kind == "exact" and photo_should_identify_product(
-                    user_message, customer_catalog
-                ):
-                    detect_media = {
-                        key: value
-                        for key, value in (media_context or {}).items()
-                        if not str(key).startswith("image")
-                    }
+                python_photo_text = image_to_text(image_bytes, image_decision)
+                if python_photo_text:
+                    user_message = f"{(user_message or '').rstrip()}\n{python_photo_text}".strip()
+                # The chat model is text-only. It must see the notes above, not the pixels.
+                detect_media = {
+                    key: value
+                    for key, value in (media_context or {}).items()
+                    if not str(key).startswith("image")
+                }
         intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
             user_message,
             state.conversation_history,
@@ -1098,7 +1101,7 @@ class AutobusNLUSystem:
                 missing_slots = []
                 state.collected_slots = {}
             else:
-                code = find_match_code(photo_description)
+                code = find_match_code(photo_description) or find_match_code(python_photo_text)
                 if code and image_decision.kind != "exact":
                     coded = lookup_match_code(
                         merchant_id,

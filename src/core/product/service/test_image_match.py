@@ -25,6 +25,7 @@ from core.product.service.image_match import (
     customer_image_intent,
     photo_should_identify_product,
 )
+from core.product.service.image_to_text import color_name, image_to_text
 
 
 def _solid(color, size=(240, 240)) -> Image.Image:
@@ -76,6 +77,31 @@ class FingerprintTests(unittest.TestCase):
         stamped = stamp_match_code(_solid((20, 140, 60), size=(640, 640)), "AB-HQ4P")
         opened = open_image(jpeg_bytes(stamped))
         self.assertEqual(opened.size, (640, 640))
+
+
+class ImageToTextTests(unittest.TestCase):
+    def test_solid_color_and_exact_catalog_match_become_text(self):
+        photo = jpeg_bytes(_solid((200, 20, 20)))
+        decision = MatchDecision(
+            kind="exact",
+            hits=[MatchHit("p1", "Mango Juice", "12.00", "https://cdn.example/a.jpg", 1.0)],
+        )
+        text = image_to_text(photo, decision)
+        self.assertIn("Photo notes:", text)
+        self.assertIn("red", text)
+        self.assertIn("exact, Mango Juice", text)
+        self.assertIn("price 12.00", text)
+        self.assertEqual(color_name((200, 20, 20)), "red")
+
+    def test_unmatched_photo_tells_the_model_not_to_invent_a_product(self):
+        text = image_to_text(jpeg_bytes(_solid((10, 10, 200))), MatchDecision())
+        self.assertIn("Catalog match: none", text)
+        self.assertIn("blue", text)
+
+    def test_unreadable_bytes_are_still_text(self):
+        text = image_to_text(b"not-an-image", None)
+        self.assertIn("could not be opened", text)
+        self.assertIn("Catalog match: none", text)
 
 
 class CustomerImageIntentTests(unittest.TestCase):

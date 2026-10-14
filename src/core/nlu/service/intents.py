@@ -159,6 +159,9 @@ class IntentDetector:
                 customer_session=customer_session,
             )
 
+            # Customer photos are converted to text before this call. Sending the
+            # pixels makes a text-only model reply that it cannot see the image.
+            send_image = bool(media_context) and not customer_session and not photo_description
             response_text = self.llm_client.chat_completion(
                 system_prompt=system_prompt,
                 user_message=prompt,
@@ -166,14 +169,10 @@ class IntentDetector:
                 temperature=0.1,
                 max_tokens=500,
                 image_base64=(
-                    media_context.get("image_base64")
-                    if customer_session and media_context and not photo_description
-                    else None
+                    media_context.get("image_base64") if send_image else None
                 ),
                 image_url=(
-                    media_context.get("image_url")
-                    if customer_session and media_context and not photo_description
-                    else None
+                    media_context.get("image_url") if send_image else None
                 ),
                 image_media_type=(media_context or {}).get("image_mime_type", "image/jpeg"),
             )
