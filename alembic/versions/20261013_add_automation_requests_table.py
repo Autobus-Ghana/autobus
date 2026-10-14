@@ -1,6 +1,6 @@
 """Add automation_requests table
 
-Revision ID: 20261013_add_automation_requests_table
+Revision ID: 20261013_automation_requests
 Revises: 20261013_add_ai_workflow_tables
 Create Date: 2026-10-13 11:45:00.000000
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '20261013_add_automation_requests_table'
+revision: str = '20261013_automation_requests'
 down_revision: Union[str, None] = '20261013_add_ai_workflow_tables'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
