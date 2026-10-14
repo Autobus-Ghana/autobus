@@ -69,7 +69,7 @@ def authenticate(email: str, password: str) -> Optional[dict[str, Any]]:
     if response.status_code != 200:
         return None
     body = response.json()
-    details = _details(body)
+    details = _details(body, preferred_email=email)
     if not details.get("email"):
         return None
     return details
@@ -116,19 +116,22 @@ def publish_user(user: Any) -> None:
         logger.warning("Green account provision failed for %s: %s", user_id, exc)
 
 
-def _details(body: dict[str, Any]) -> dict[str, Any]:
-    email = ""
+def _details(body: dict[str, Any], preferred_email: str = "") -> dict[str, Any]:
+    """One Green account can hold several emails; keep the one the person signed in with."""
+    preferred = (preferred_email or "").strip().lower()
+    emails: list[str] = []
     phone = ""
     ghana_card = ""
     for item in body.get("identifiers") or []:
         kind = (item.get("type") or "").strip().lower()
         value = (item.get("value") or "").strip()
         if kind == "email" and value:
-            email = value
+            emails.append(value)
         elif kind == "phone" and value and not phone:
             phone = value
         elif kind == "ghana_card" and value and not ghana_card:
             ghana_card = value
+    email = next((e for e in emails if e.lower() == preferred), emails[0] if emails else "")
     return {
         "green_account_id": body.get("green_account_id"),
         "display_name": body.get("display_name"),
