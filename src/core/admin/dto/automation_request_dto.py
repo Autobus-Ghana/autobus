@@ -21,6 +21,7 @@ class AutomationRequestResponse(BaseModel):
     contact_email: Optional[str] = Field(default=None, alias="contactEmail")
     contact_phone: Optional[str] = Field(default=None, alias="contactPhone")
     survey_data: Optional[Dict[str, Any]] = Field(default=None, alias="surveyData")
+    user_id: Optional[str] = Field(default=None, alias="userId")
 
 
 class CreateAutomationRequestPayload(BaseModel):

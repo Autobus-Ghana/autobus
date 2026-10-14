@@ -448,6 +448,17 @@ def get_automation_request(
     return AutomationRequestService(db).get_by_id(request_id)
 
 
+@admin_routes.post("/automation-requests/{request_id}/start-workflow", response_model=AutomationRequestResponse)
+def start_automation_workflow(
+    request_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Open a builder canvas for this request, with the modules the business selected."""
+    _ = admin
+    return AutomationRequestService(db).start_workflow(request_id)
+
+
 @admin_routes.patch("/automation-requests/{request_id}/status", response_model=AutomationRequestResponse)
 def update_automation_request_status(
     request_id: str,

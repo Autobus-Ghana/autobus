@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     N8N_BASE_URL: str = os.environ.get("N8N_BASE_URL", "http://n8n:5678").strip().rstrip("/")
     N8N_API_KEY: str = os.environ.get("N8N_API_KEY", "").strip()
     N8N_PUBLIC_URL: str = os.environ.get("N8N_PUBLIC_URL", "https://n8n.useautobus.com").strip().rstrip("/")
+    # Shared secret n8n sends as X-Workflow-Key when a workflow calls an Autobus agent.
+    # Set the same value on the n8n container as AUTOBUS_WORKFLOW_KEY.
+    WORKFLOW_ACTION_KEY: str = os.environ.get("WORKFLOW_ACTION_KEY", "").strip()
+    AUTOBUS_PUBLIC_API_URL: str = os.environ.get(
+        "AUTOBUS_PUBLIC_API_URL", "https://api.useautobus.com"
+    ).strip().rstrip("/")
 
     # OTP Configuration
     # Prefer OTP_EXPIRE_SECONDS; if unset, honor OTP_EXPIRE_MINUTES (compose default 5).

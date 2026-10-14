@@ -52,6 +52,7 @@ from core.admin.controller.admin_controller import (
 from core.ai_workflow.controller.ai_workflow_controller import ai_workflow_routes
 from core.embed.controller.embed_controller import embed_routes, portal_embed_routes
 from core.n8n.controller.n8n_controller import n8n_routes
+from core.workflow_actions.controller import workflow_action_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -381,6 +382,11 @@ app.include_router(intervention_routes, prefix="/api/v1/interventions", tags=["I
 app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["Conversation Routes"])
 app.include_router(intelligence_routes, prefix="/api/v1/intelligence", tags=["Intelligence / My AI"])
 app.include_router(n8n_routes, prefix="/api/v1/admin/n8n", tags=["Platform Admin – n8n"])
+app.include_router(
+    workflow_action_routes,
+    prefix="/api/v1/workflow-actions",
+    tags=["Workflow actions (n8n)"],
+)
 app.include_router(admin_routes, prefix="/api/v1/admin", tags=["Platform Admin"])
 app.include_router(ai_workflow_routes, prefix="/api/v1/admin/ai-workflows", tags=["AI Workflows"])
 app.include_router(public_automation_routes, prefix="/api/v1", tags=["Automation Requests (Portal)"])

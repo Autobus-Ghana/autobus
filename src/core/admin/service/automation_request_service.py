@@ -12,6 +12,10 @@ from core.admin.dto.automation_request_dto import (
     PortalSurveySubmitRequest,
 )
 from core.admin.model.automation_request import AutomationRequest
+from core.admin.service.workflow_seed import MODULE_LABELS, build_starter_graph, parse_requested_modules
+from core.ai_workflow.dto.ai_workflow_dto import WorkflowCreateRequest
+from core.ai_workflow.model.ai_workflow import AIWorkflow
+from core.ai_workflow.service.ai_workflow_service import AIWorkflowService
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,7 @@ class AutomationRequestService:
             contact_email=model.contact_email,
             contact_phone=model.contact_phone,
             survey_data=model.survey_data or {},
+            user_id=model.user_id,
         )
 
     def list_all(
@@ -191,6 +196,52 @@ class AutomationRequestService:
             contact_name,
             biz_name,
             req.id,
+        )
+        return self._to_response(req)
+
+    def start_workflow(self, request_id: str) -> AutomationRequestResponse:
+        """Create the admin canvas for this request, seeded with the modules the business asked for."""
+        req = self.db.query(AutomationRequest).filter(AutomationRequest.id == request_id).first()
+        if not req:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Automation request '{request_id}' not found",
+            )
+        if req.workflow_id:
+            existing = self.db.query(AIWorkflow).filter(AIWorkflow.id == req.workflow_id).first()
+            if existing:
+                return self._to_response(req)
+
+        modules = parse_requested_modules(req.survey_data)
+        nodes, edges, category = build_starter_graph(
+            req.id, req.user_id or "", req.survey_data
+        )
+        module_text = ", ".join(MODULE_LABELS[item] for item in modules) or "no modules selected yet"
+        business = (req.business_name or "Merchant").strip()
+        created = AIWorkflowService(self.db).create_workflow(
+            WorkflowCreateRequest(
+                name=f"Custom: {business}"[:200],
+                businessName=business[:120] or "General",
+                description=(
+                    f"Built from automation request {req.id}. "
+                    f"Requested modules: {module_text}.\n\n{req.description or ''}"
+                )[:4000],
+                category=category,
+                active=False,
+                nodes=nodes,
+                edges=edges,
+            )
+        )
+        req.workflow_id = created.id
+        if req.status in {"Submitted", "Triaged", "Approved"}:
+            req.status = "In progress"
+        req.updated_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(req)
+        logger.info(
+            "[AUTOMATION_REQUEST] Started workflow %s for request %s",
+            created.id,
+            request_id,
         )
         return self._to_response(req)
 

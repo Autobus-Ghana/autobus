@@ -219,6 +219,32 @@ def get_custom_agent_questionnaire():
                 "required": True,
             },
             {
+                "id": "modules",
+                "prompt": "Which Autobus capabilities should this workflow use?",
+                "hint": "Select every one the back office should wire into the custom workflow.",
+                "required": True,
+                "allow_multiple": True,
+                "options": [
+                    "Business intelligence",
+                    "Customer service",
+                    "Digital marketing (create content)",
+                    "Multi-account posting",
+                ],
+            },
+            {
+                "id": "trigger",
+                "prompt": "When should the workflow run?",
+                "hint": "This becomes the first step. The team can change it later.",
+                "placeholder": "Select a trigger",
+                "required": True,
+                "options": [
+                    "When a customer message arrives",
+                    "On a schedule",
+                    "When someone runs it manually",
+                    "When another system calls a webhook",
+                ],
+            },
+            {
                 "id": "integrations",
                 "prompt": "What should it connect to?",
                 "hint": "Optional. We will use what you already have in Autobus unless you say otherwise.",
@@ -298,6 +324,10 @@ def submit_custom_agent_request(
         summary_lines.append(f"Channels: {channels}")
     if answers.get("business_summary"):
         summary_lines.append(f"Business Summary: {answers.get('business_summary')}")
+    if answers.get("modules"):
+        summary_lines.append(f"Modules: {answers.get('modules')}")
+    if answers.get("trigger"):
+        summary_lines.append(f"Trigger: {answers.get('trigger')}")
     if answers.get("typical_requests"):
         summary_lines.append(f"Typical Requests: {answers.get('typical_requests')}")
     if answers.get("handoff_rules"):
@@ -316,9 +346,9 @@ def submit_custom_agent_request(
     )
 
     req = AutomationRequest(
-        title=f"Custom Agent: {biz_name}",
+        title=f"Custom workflow: {biz_name}",
         description=description,
-        category="Custom Agent",
+        category="Custom Workflow",
         priority="Normal",
         status="Submitted",
         requested_by=contact_name,
