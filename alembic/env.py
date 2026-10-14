@@ -37,6 +37,22 @@ if db_url:
 
 target_metadata = Base.metadata
 
+# Created with raw SQL in src/app.py (expression and partial unique indexes the models cannot express).
+STARTUP_MANAGED_INDEXES = {"uq_products_user_sub_external", "uq_product_images_match_code"}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "index" and name in STARTUP_MANAGED_INDEXES:
+        return False
+    return True
+
+
+def compare_type(context, inspected_column, metadata_column, inspected_type, metadata_type):
+    json_types = {"JSON", "JSONB"}
+    if type(inspected_type).__name__ in json_types and type(metadata_type).__name__ in json_types:
+        return False
+    return None
+
 
 def run_migrations_offline():
     """Run migrations in 'offline' mode."""
@@ -71,7 +87,8 @@ def run_migrations_online():
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            compare_type=True,
+            compare_type=compare_type,
+            include_object=include_object,
         )
 
         with context.begin_transaction():
