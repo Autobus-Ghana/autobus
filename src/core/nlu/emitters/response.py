@@ -50,7 +50,7 @@ class ResponseFormatter:
             return "I am currently fulfilling a transaction for you. Please wait a moment, I will attend to you when I'm done."
 
         elif message_type == "intervention_created":
-            return "I’m bringing in a human agent to help you. Please hold on a moment."
+            return "please hold on i will get back to you in a minute"
 
         elif message_type == "intervention_active":
             return "A human agent is currently assisting you. Please share any extra details and they’ll respond shortly."

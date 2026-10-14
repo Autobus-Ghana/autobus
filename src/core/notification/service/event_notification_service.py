@@ -206,7 +206,10 @@ class EventNotificationService:
         if len(ask) > 90:
             ask = ask[:87].rstrip() + "..."
         detail = f' They said: "{ask}".' if ask else ""
-        sms_body = f"AutoBus: {customer_label} needs you.{detail} Open Live Chats."
+        sms_body = (
+            f"AutoBus: Please attend an intervention. {customer_label} needs you."
+            f"{detail} Open Live Chats."
+        )
         display_reason = (reason or trigger or "Agent handover").strip()
         data = {
             "event": "intervention_active",

@@ -119,6 +119,11 @@ class IntentProcessor:
             slots=slots
         )
 
+        cannot_handle_rule = ""
+        if self._is_customer_session(user_data):
+            cannot_handle_rule = (
+                " If you cannot answer from these facts, reply with exactly CANNOT_HANDLE and nothing else."
+            )
         if rag_context and rag_context.strip():
             system_prompt = (
                 system_prompt
@@ -127,16 +132,20 @@ class IntentProcessor:
                 + "\n\nGrounding rules: Only use facts from Retrieved memory. "
                 + "If a Product catalog section is present, that is the only source for product names, prices, and stock. "
                 + "Never invent products, prices, or services, and never use website/document text as a product list."
+                + cannot_handle_rule
             )
         else:
             system_prompt = (
                 system_prompt
                 + "\n\n## Retrieved memory\n"
                 + "No relevant indexed documents were retrieved for this question. "
-                + "Do not invent company or product facts. "
-                + "If the user asks about products, say you do not have listed products yet. "
-                + "If the user asks about the business, say you need more information "
-                + "in the knowledge base (or that a human agent can help)."
+                + "Do not invent company or product facts."
+                + (
+                    cannot_handle_rule
+                    or " If the user asks about products, say you do not have listed products yet. "
+                    "If the user asks about the business, say you need more information "
+                    "in the knowledge base (or that a human agent can help)."
+                )
             )
 
         if self._is_customer_session(user_data):

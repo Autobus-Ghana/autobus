@@ -870,11 +870,11 @@ class AutobusNLUSystem:
         )
         return self._hold_for_human_reply(user_id)
 
+    HOLD_FOR_HUMAN_REPLY = "please hold on i will get back to you in a minute"
+
     def _hold_for_human_reply(self, user_id: str) -> str:
         """What the customer sees after we pause the bot and text the owner."""
-        if self._is_customer_inbox_user(user_id):
-            return "Give us a few minutes and someone from the shop will get back to you."
-        return self.response_formatter.format_response("", "intervention_created")
+        return self.HOLD_FOR_HUMAN_REPLY
 
     @classmethod
     def _assistant_admits_cannot_handle(cls, text: str) -> bool:
@@ -901,6 +901,14 @@ class AutobusNLUSystem:
             "unable to answer",
             "don't have listed products yet",
             "do not have listed products yet",
+            "we do not have products listed",
+            "we don't have anything listed",
+            "i'll check with the shop",
+            "i will check with the shop",
+            "i'll have the shop check",
+            "i can't confirm",
+            "i cannot confirm",
+            "cannot_handle",
         )
         return any(n in t for n in needles)
 
@@ -919,6 +927,30 @@ class AutobusNLUSystem:
         if looks_like_faq(user_message) or self._looks_like_new_request(user_message):
             return True
         return len((user_message or "").split()) >= 4
+
+    def _handoff_if_customer_reply_cannot_handle(
+        self,
+        *,
+        user_id: str,
+        user_data: Optional[Dict[str, Any]],
+        message: str,
+        user_message: str,
+        intent: str,
+    ) -> str:
+        """Swap a shop reply the assistant cannot stand behind for a human handoff."""
+        if not (user_data or {}).get("is_customer_session"):
+            return message
+        if not (
+            self._assistant_admits_cannot_handle(message)
+            or self._empty_catalog_cannot_fulfill(message, user_message)
+        ):
+            return message
+        return self._handoff_because_ai_cannot_handle(
+            user_id=user_id,
+            trigger="assistant_cannot_handle",
+            reason=user_message or (message or "")[:240],
+            metadata={"intent": intent},
+        )
 
     def _empty_catalog_cannot_fulfill(
         self, assistant_message: str, user_message: str = ""
@@ -2424,17 +2456,13 @@ class AutobusNLUSystem:
                 user_id=owner_id,
                 user_data=user_data
             )
-            if (
-                user_data
-                and user_data.get("is_customer_session")
-                and self._empty_catalog_cannot_fulfill(msg, user_message)
-            ):
-                msg = self._handoff_because_ai_cannot_handle(
-                    user_id=user_id,
-                    trigger="insufficient_catalog",
-                    reason=user_message or "no products listed",
-                    metadata={"intent": intent},
-                )
+            msg = self._handoff_if_customer_reply_cannot_handle(
+                user_id=user_id,
+                user_data=user_data,
+                message=msg,
+                user_message=user_message,
+                intent=intent,
+            )
             http = 200 if (msg or "").strip().startswith("✅") else None
             return IntentHandlerResult(msg, http)
         elif intent in order_management_intents:
@@ -2451,17 +2479,13 @@ class AutobusNLUSystem:
                 user_id=owner_id,
                 user_data=user_data,
             )
-            if (
-                user_data
-                and user_data.get("is_customer_session")
-                and self._empty_catalog_cannot_fulfill(msg, user_message)
-            ):
-                msg = self._handoff_because_ai_cannot_handle(
-                    user_id=user_id,
-                    trigger="insufficient_catalog",
-                    reason=user_message or "no products listed to fulfill order",
-                    metadata={"intent": intent},
-                )
+            msg = self._handoff_if_customer_reply_cannot_handle(
+                user_id=user_id,
+                user_data=user_data,
+                message=msg,
+                user_message=user_message,
+                intent=intent,
+            )
             return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
         elif intent in user_management_intents:
             return self._process_user_management_intent(user_id, intent, slots)
@@ -2623,19 +2647,17 @@ class AutobusNLUSystem:
             catalog_context = self._format_merchant_product_catalog(user_data)
             if catalog_context:
                 rag_context = catalog_context
-            elif looks_like_order_request(user_message):
+            else:
                 logger.info(
-                    "[SHOP] Empty catalog for customer order %s; activating intervention",
+                    "[SHOP] Empty catalog for customer session %s; activating intervention",
                     user_id,
                 )
                 return self._handoff_because_ai_cannot_handle(
                     user_id=user_id,
                     trigger="insufficient_catalog",
-                    reason=user_message or "no products listed to fulfill order",
+                    reason=user_message or "no products listed",
                     metadata={"intent": intent},
                 )
-            else:
-                return "We do not have products listed in our catalog yet."
         elif is_customer and self._customer_needs_human_for_unknown(
             user_message, intent=intent
         ):

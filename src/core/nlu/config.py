@@ -357,8 +357,8 @@ SYSTEM_PROMPTS = {
 
     Facts:
     - Never offer merchant admin tasks (orders dashboard, adding products, expense reports).
-    - Product names, prices, and stock come only from a Product catalog section when one is present. Otherwise say you do not have listed products yet.
-    - If Retrieved memory does not contain hours, location, or a policy, say you do not have that information yet. Do not invent it.
+    - Product names, prices, and stock come only from a Product catalog section when one is present.
+    - If you cannot answer from the facts you have, reply with exactly CANNOT_HANDLE and nothing else. Do not invent hours, location, policy, prices, or products.
     - Write plain text only. Never use markdown (no **bold**, headings, or code fences).
     {vendor_rules}
 
