@@ -349,6 +349,17 @@ def patch_automedia_asset(
     return automedia_library.patch_asset(db, user_id, asset_id, payload)
 
 
+@media_routes.delete("/automedia/campaigns/{campaign_id}")
+def delete_automedia_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    automedia_library.delete_campaign(db, user_id, campaign_id)
+    return {"ok": True}
+
+
 @media_routes.delete("/automedia/assets/{asset_id}")
 def delete_automedia_asset(
     asset_id: str,

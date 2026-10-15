@@ -294,6 +294,19 @@ def patch_asset(db: Session, user_id: str, asset_id: str, payload: AutomediaAsse
     return asset_to_dto(row)
 
 
+def delete_campaign(db: Session, user_id: str, campaign_id: str) -> None:
+    row = _get_campaign(db, campaign_id, user_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    (
+        db.query(AutomediaAsset)
+        .filter(AutomediaAsset.campaign_id == campaign_id, AutomediaAsset.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
+    db.delete(row)
+    db.commit()
+
+
 def delete_asset(db: Session, user_id: str, asset_id: str) -> None:
     row = (
         db.query(AutomediaAsset)
