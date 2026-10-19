@@ -7,9 +7,11 @@ import unittest
 from core.socialmedia.service.tiktok_direct_post import (
     CONSENT_BRANDED,
     CONSENT_MUSIC,
+    RECONNECT_TIKTOK_MESSAGE,
     _posts_for_integration,
     _usable_creator_info,
     extract_publish_ids,
+    is_tiktok_auth_failure,
     normalize_creator_info,
     normalize_publish_status,
     tiktok_consent_text,
@@ -83,6 +85,20 @@ class NormalizeCreatorInfoTest(unittest.TestCase):
 
     def test_empty_payload_is_not_usable(self):
         self.assertIsNone(_usable_creator_info({}))
+
+    def test_invalid_access_token_is_not_creator_info(self):
+        payload = {
+            "error": {
+                "code": "access_token_invalid",
+                "message": "The access token is invalid or not found in the request.",
+                "log_id": "abc",
+            }
+        }
+        self.assertTrue(is_tiktok_auth_failure(payload))
+        self.assertIsNone(_usable_creator_info(payload, fallback_name="Shop"))
+        info = normalize_creator_info(payload)
+        self.assertFalse(info["can_post"])
+        self.assertEqual(info["cannot_post_reason"], RECONNECT_TIKTOK_MESSAGE)
 
 
 class ConsentAndStatusTest(unittest.TestCase):

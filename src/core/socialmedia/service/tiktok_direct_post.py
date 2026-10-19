@@ -23,6 +23,17 @@ TIKTOK_CREATOR_INFO_URL = (
 TIKTOK_PUBLISH_STATUS_URL = (
     "https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 )
+TIKTOK_OAUTH_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
+RECONNECT_TIKTOK_MESSAGE = (
+    "TikTok needs to be linked again. Open Marketing, disconnect TikTok, and connect it once more."
+)
+_AUTH_FAILURE_MARKERS = (
+    "access_token_invalid",
+    "access_token_expired",
+    "invalid_access_token",
+    "the access token is invalid",
+    "access token is invalid or not found",
+)
 
 CANNOT_POST_ERROR_CODES = frozenset(
     {
@@ -147,6 +158,31 @@ def user_facing_publish_error(fail_reason: str) -> str:
     return text
 
 
+def is_tiktok_auth_failure(payload: Any) -> bool:
+    """True when TikTok rejected the call because the access token cannot be used."""
+    parts: List[str] = []
+    if isinstance(payload, str):
+        parts.append(payload)
+    elif isinstance(payload, dict):
+        error = _as_dict(payload.get("error"))
+        parts.extend(
+            [
+                _first_str(error.get("code"), payload.get("error_code"), payload.get("code")),
+                _first_str(
+                    error.get("message"),
+                    payload.get("message"),
+                    payload.get("error_description"),
+                    payload.get("cannot_post_reason"),
+                ),
+            ]
+        )
+        nested = payload.get("data")
+        if isinstance(nested, dict):
+            parts.append(_first_str(nested.get("error_code"), nested.get("message")))
+    blob = " ".join(part for part in parts if part).lower()
+    return any(marker in blob for marker in _AUTH_FAILURE_MARKERS)
+
+
 def cannot_post_reason(error_code: str, error_message: str = "") -> str:
     code = (error_code or "").strip()
     if code == "spam_risk_too_many_posts":
@@ -181,7 +217,10 @@ def normalize_creator_info(
     can_post_field = data.get("can_post", root.get("can_post"))
     can_post = True if can_post_field is None else _as_bool(can_post_field, True)
     blocked_reason = ""
-    if error_code in CANNOT_POST_ERROR_CODES or not error_is_ok:
+    if is_tiktok_auth_failure({"error_code": error_code, "message": error_message}):
+        can_post = False
+        blocked_reason = RECONNECT_TIKTOK_MESSAGE
+    elif error_code in CANNOT_POST_ERROR_CODES or not error_is_ok:
         can_post = False
         blocked_reason = cannot_post_reason(error_code, error_message)
     elif can_post_field is not None and not can_post:
@@ -363,6 +402,83 @@ def normalize_publish_status(payload: Any) -> Dict[str, Any]:
     }
 
 
+def _postiz_engine():
+    dsn = os.getenv("POSTIZ_DATABASE_URL", "").strip()
+    if not dsn:
+        return None
+    return create_engine(dsn, pool_pre_ping=True)
+
+
+def tiktok_tokens_from_postiz_db(integration_id: str) -> Dict[str, str]:
+    """Read the TikTok access token and refresh token stored by Postiz."""
+    iid = (integration_id or "").strip()
+    engine = _postiz_engine()
+    if engine is None or not iid:
+        return {}
+    sql = """
+        SELECT token, "refreshToken"
+        FROM "Integration"
+        WHERE id = :id AND "providerIdentifier" = 'tiktok'
+          AND ("deletedAt" IS NULL)
+        LIMIT 1
+    """
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text(sql), {"id": iid}).mappings().first()
+    except Exception as exc:
+        logger.warning("[SOCIAL] Could not read TikTok tokens from Postiz DB: %s", exc)
+        return {}
+    if not row:
+        return {}
+    access = _first_str(row.get("token"))
+    refresh = _first_str(row.get("refreshToken"))
+    out: Dict[str, str] = {}
+    if access:
+        out["token"] = access
+    if refresh:
+        out["refresh_token"] = refresh
+    return out
+
+
+def store_tiktok_tokens(
+    integration_id: str,
+    access_token: str,
+    refresh_token: str,
+    expires_in: int,
+) -> None:
+    """Write a refreshed TikTok token back so later posts use it."""
+    iid = (integration_id or "").strip()
+    access = (access_token or "").strip()
+    refresh = (refresh_token or "").strip()
+    engine = _postiz_engine()
+    if engine is None or not iid or not access or not refresh:
+        return
+    from datetime import datetime, timedelta, timezone
+
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(int(expires_in or 0), 60))
+    sql = """
+        UPDATE "Integration"
+        SET token = :token,
+            "refreshToken" = :refresh,
+            "tokenExpiration" = :expires_at,
+            "refreshNeeded" = false
+        WHERE id = :id AND "providerIdentifier" = 'tiktok'
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(sql),
+                {
+                    "id": iid,
+                    "token": access,
+                    "refresh": refresh,
+                    "expires_at": expires_at,
+                },
+            )
+    except Exception as exc:
+        logger.warning("[SOCIAL] Could not store refreshed TikTok token: %s", exc)
+
+
 def token_from_postiz_db(integration_id: str) -> Optional[str]:
     dsn = os.getenv("POSTIZ_DATABASE_URL", "").strip()
     iid = (integration_id or "").strip()
@@ -464,6 +580,50 @@ async def query_tiktok_publish_status(
     return res.json() if res.text.strip() else {}
 
 
+def _tiktok_app_credentials() -> Tuple[str, str]:
+    client_key = (
+        os.getenv("TIKTOK_CLIENT_ID", "").strip()
+        or os.getenv("TIKTOK_CLIENT_KEY", "").strip()
+    )
+    client_secret = os.getenv("TIKTOK_CLIENT_SECRET", "").strip()
+    return client_key, client_secret
+
+
+async def refresh_tiktok_access_token(refresh_token: str) -> Optional[Dict[str, Any]]:
+    """Exchange a TikTok refresh token for a new access token."""
+    client_key, client_secret = _tiktok_app_credentials()
+    refresh = (refresh_token or "").strip()
+    if not client_key or not client_secret or not refresh:
+        return None
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        res = await client.post(
+            TIKTOK_OAUTH_TOKEN_URL,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "client_key": client_key,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+            },
+        )
+    try:
+        payload = res.json() if res.text.strip() else {}
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    access = _first_str(payload.get("access_token"))
+    if not access:
+        logger.info(
+            "[SOCIAL] TikTok token refresh failed (%s): %s",
+            res.status_code,
+            _first_str(payload.get("error"), payload.get("error_description"))
+            or "no access token",
+        )
+        return None
+    return payload
+
+
 def _usable_creator_info(
     payload: Any,
     *,
@@ -471,12 +631,18 @@ def _usable_creator_info(
     fallback_username: str = "",
     fallback_avatar: str = "",
 ) -> Optional[Dict[str, Any]]:
+    if is_tiktok_auth_failure(payload):
+        return None
     info = normalize_creator_info(
         payload,
         fallback_name=fallback_name,
         fallback_username=fallback_username,
         fallback_avatar=fallback_avatar,
     )
+    if is_tiktok_auth_failure(
+        {"error_code": info.get("error_code"), "message": info.get("cannot_post_reason")}
+    ):
+        return None
     if not (
         info["privacy_level_options"] or info["creator_nickname"] or info["error_code"]
     ):
@@ -528,19 +694,41 @@ async def load_tiktok_creator_info(
 
     # TikTok's official API is the source of truth. This Postiz build has no
     # public creator-info route (404) and no getCreatorInfo method (500).
-    token = token_from_postiz_db(iid)
-    if token:
+    stored = tiktok_tokens_from_postiz_db(iid)
+    token = stored.get("token") or token_from_postiz_db(iid)
+    refresh_token = stored.get("refresh_token") or ""
+
+    async def creator_from_access_token(access_token: str) -> Optional[Dict[str, Any]]:
         try:
-            info = _usable_creator_info(
-                await query_tiktok_creator_info(token),
-                fallback_name=fallback_name,
-                fallback_username=fallback_username,
-                fallback_avatar=fallback_avatar,
-            )
+            payload = await query_tiktok_creator_info(access_token)
+        except PostizAPIError as exc:
+            if is_tiktok_auth_failure(exc.body or str(exc)):
+                return None
+            logger.info("[SOCIAL] Direct TikTok creator_info failed: %s", exc)
+            return None
+        return _usable_creator_info(
+            payload,
+            fallback_name=fallback_name,
+            fallback_username=fallback_username,
+            fallback_avatar=fallback_avatar,
+        )
+
+    if token:
+        info = await creator_from_access_token(token)
+        if info:
+            return info
+
+    # Access tokens expire after a day. Refresh and retry before asking the user to reconnect.
+    if refresh_token:
+        refreshed = await refresh_tiktok_access_token(refresh_token)
+        if refreshed:
+            new_access = _first_str(refreshed.get("access_token"))
+            new_refresh = _first_str(refreshed.get("refresh_token")) or refresh_token
+            expires_in = _as_int(refreshed.get("expires_in")) or 86400
+            store_tiktok_tokens(iid, new_access, new_refresh, expires_in)
+            info = await creator_from_access_token(new_access)
             if info:
                 return info
-        except PostizAPIError as exc:
-            logger.info("[SOCIAL] Direct TikTok creator_info failed: %s", exc)
 
     session_jwt = ""
     if postiz_email and postiz_password:
@@ -571,10 +759,7 @@ async def load_tiktok_creator_info(
         except PostizAPIError as exc:
             logger.info("[SOCIAL] Postiz queryCreatorInfo failed: %s", exc)
 
-    raise PostizAPIError(
-        "Could not load TikTok creator info. Reconnect TikTok and try again.",
-        status_code=502,
-    )
+    raise PostizAPIError(RECONNECT_TIKTOK_MESSAGE, status_code=502)
 
 
 async def load_tiktok_publish_status(

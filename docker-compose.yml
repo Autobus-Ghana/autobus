@@ -213,6 +213,9 @@ services:
       POSTIZ_PUBLIC_URL: ${POSTIZ_PUBLIC_URL:-https://postiz.useautobus.com}
       # Optional. Lets Autobus query TikTok creator_info with the stored Postiz token.
       POSTIZ_DATABASE_URL: ${POSTIZ_DATABASE_URL:-postgresql://postiz-user:postiz-password@postiz-postgres:5432/postiz-db-local}
+      # Same TikTok app as Postiz. Used to refresh an expired access token before creator_info.
+      TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
       # Postiz/Chatwoot LOCAL login: email + Autobus username (fullname), not the Autobus password.
       # When true, enables POST /api/v1/integrations/provision-self-test (destructive upstream).
       INTEGRATIONS_SELF_TEST_ENABLED: ${INTEGRATIONS_SELF_TEST_ENABLED:-false}
