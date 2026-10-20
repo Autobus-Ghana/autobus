@@ -6,14 +6,20 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from core.ai_workflow.dto.ai_workflow_dto import (
+    AiSettingsResponse,
+    AiSettingsTestResponse,
+    AiSettingsUpdateRequest,
     BusinessCreateRequest,
     BusinessResponse,
+    GenerateWorkflowRequest,
+    GenerateWorkflowResponse,
     WorkflowCreateRequest,
     WorkflowResponse,
     WorkflowSyncN8nRequest,
     WorkflowToggleActiveRequest,
     WorkflowUpdateRequest,
 )
+from core.ai_workflow.service.ai_assistant_service import AIAssistantService
 from core.ai_workflow.service.ai_workflow_service import AIWorkflowService
 from core.auth.dependencies import require_admin
 from core.user.model.User import User
@@ -67,6 +73,65 @@ def delete_business(
     _ = admin
     AIWorkflowService(db).delete_business(id_or_name)
     return {"success": True, "message": f"Business '{id_or_name}' deleted."}
+
+
+# -------------------------------------------------------------
+# Assistant provider settings
+# Registered before /{workflow_id} so "ai" is not treated as a workflow id.
+# -------------------------------------------------------------
+
+@ai_workflow_routes.get(
+    "/ai/settings",
+    response_model=AiSettingsResponse,
+    summary="Get the AI assistant provider and model",
+)
+def get_ai_settings(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AIAssistantService(db).get_settings()
+
+
+@ai_workflow_routes.put(
+    "/ai/settings",
+    response_model=AiSettingsResponse,
+    summary="Save the AI assistant provider, model, and optional API key",
+)
+def save_ai_settings(
+    payload: AiSettingsUpdateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AIAssistantService(db).save_settings(payload)
+
+
+@ai_workflow_routes.post(
+    "/ai/settings/test",
+    response_model=AiSettingsTestResponse,
+    summary="Test the saved AI provider credentials",
+)
+def test_ai_settings(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AIAssistantService(db).test_connection()
+
+
+@ai_workflow_routes.post(
+    "/ai/generate",
+    response_model=GenerateWorkflowResponse,
+    summary="Generate an n8n workflow from a plain-language request",
+)
+def generate_ai_workflow(
+    payload: GenerateWorkflowRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AIAssistantService(db).generate_workflow(payload)
 
 
 # -------------------------------------------------------------

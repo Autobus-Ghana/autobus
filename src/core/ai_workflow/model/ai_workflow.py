@@ -91,3 +91,20 @@ class AIWorkflow(Base):
 # Indexes for optimal querying
 Index("ix_ai_workflows_business_active", AIWorkflow.business_name, AIWorkflow.active)
 Index("ix_ai_workflows_category", AIWorkflow.category)
+
+
+class AIWorkflowAssistantSettings(Base):
+    """Single-row provider settings for the workflow assistant. The API key is encrypted."""
+
+    __tablename__ = "ai_workflow_assistant_settings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="openai")
+    model: Mapped[str] = mapped_column(String(80), nullable=False, default="gpt-6.1-sol")
+    api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=True,
+    )

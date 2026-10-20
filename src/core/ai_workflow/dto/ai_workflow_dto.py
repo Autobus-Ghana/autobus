@@ -77,6 +77,34 @@ class WorkflowToggleActiveRequest(BaseModel):
     active: Optional[bool] = None
 
 
+class AiSettingsUpdateRequest(BaseModel):
+    provider: str
+    model: str
+    apiKey: Optional[str] = None
+
+
+class AiSettingsResponse(BaseModel):
+    provider: str
+    model: str
+    apiKeyConfigured: bool
+
+
+class AiSettingsTestResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class GenerateWorkflowRequest(BaseModel):
+    businessName: str = Field(..., min_length=1, max_length=120)
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    supportedNodeTypes: List[str] = Field(default_factory=list)
+
+
+class GenerateWorkflowResponse(BaseModel):
+    workflow: Dict[str, Any]
+    description: Optional[str] = None
+
+
 class WorkflowResponse(BaseModel):
     id: str
     name: str
