@@ -12,6 +12,7 @@ from PIL import Image
 from core.socialmedia.service.instagram_media_prepare import (
     FEED_MAX_RATIO,
     FEED_MIN_RATIO,
+    InstagramMediaPrepareError,
     InstagramMediaPrepareService,
     STORY_RATIO,
     encode_jpeg,
@@ -154,6 +155,78 @@ class PostizPayloadTests(unittest.TestCase):
         self.assertNotIn("&", path)
         self.assertTrue(storage.files)
         self.assertTrue(next(iter(storage.files.values()))[:3] == b"\xff\xd8\xff")
+
+    def test_tiktok_photo_is_rejected(self):
+        png = _png_bytes(800, 800)
+        service = InstagramMediaPrepareService(storage=FakeStorage())
+        payload = {
+            "posts": [
+                {
+                    "integration": {"id": "tt-1"},
+                    "settings": {"__type": "tiktok"},
+                    "value": [
+                        {
+                            "content": "hello",
+                            "image": [{"id": "media_0", "path": "https://files.example/photo.png"}],
+                        }
+                    ],
+                }
+            ]
+        }
+        with patch(
+            "core.socialmedia.service.instagram_media_prepare._download",
+            return_value=(png, "image/png"),
+        ):
+            with self.assertRaises(InstagramMediaPrepareError) as caught:
+                service.prepare_postiz_payload(payload)
+        self.assertIn("video", str(caught.exception).lower())
+
+    def test_tiktok_mov_is_rehosted_as_mp4(self):
+        mov = b"\x00\x00\x00\x18ftypqt  " + b"\x00" * 32
+        storage = FakeStorage()
+        service = InstagramMediaPrepareService(storage=storage)
+        payload = {
+            "posts": [
+                {
+                    "integration": {"id": "tt-1"},
+                    "settings": {"__type": "tiktok"},
+                    "value": [
+                        {
+                            "content": "hello",
+                            "image": [{"id": "media_0", "path": "https://files.example/clip.MOV?X-Amz-Signature=1"}],
+                        }
+                    ],
+                }
+            ]
+        }
+        with patch(
+            "core.socialmedia.service.instagram_media_prepare._download",
+            return_value=(mov, "video/quicktime"),
+        ):
+            with patch.dict(os.environ, {"AUTOBUS_PUBLIC_API_URL": "https://api.useautobus.com"}):
+                out = service.prepare_postiz_payload(payload)
+        path = out["posts"][0]["value"][0]["image"][0]["path"]
+        self.assertTrue(path.endswith(".mp4"))
+        self.assertNotIn("?", path)
+
+    def test_local_blob_url_is_rejected(self):
+        service = InstagramMediaPrepareService(storage=FakeStorage())
+        payload = {
+            "posts": [
+                {
+                    "settings": {"__type": "instagram"},
+                    "value": [
+                        {
+                            "content": "hello",
+                            "image": [{"id": "media_0", "path": "blob:http://localhost:5173/abc"}],
+                        }
+                    ],
+                }
+            ]
+        }
+        with self.assertRaises(InstagramMediaPrepareError) as caught:
+            service.prepare_postiz_payload(payload)
+        self.assertIn("device", str(caught.exception).lower())
 
 
 class ParseHttpByteRangeTest(unittest.TestCase):

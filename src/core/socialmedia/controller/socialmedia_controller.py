@@ -59,6 +59,7 @@ from core.socialmedia.service.instagram_media_prepare import (
     InstagramMediaPrepareError,
     InstagramMediaPrepareService,
     parse_http_byte_range,
+    payload_has_attached_media,
 )
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.cloudstorage.service.storageservice import StorageFolder, StorageService
@@ -1187,7 +1188,7 @@ async def postiz_create_post(
         )
 
     _, media_links = extract_marketing_text_and_links(payload)
-    if media_links:
+    if media_links or payload_has_attached_media(payload):
         try:
             payload = await asyncio.to_thread(
                 InstagramMediaPrepareService().prepare_postiz_payload,

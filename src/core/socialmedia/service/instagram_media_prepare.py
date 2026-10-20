@@ -312,6 +312,30 @@ def _download(url: str) -> Tuple[bytes, str]:
     return data, content_type
 
 
+def payload_has_attached_media(payload: Dict[str, Any]) -> bool:
+    """True when a Postiz payload includes any media path, even a local blob URL."""
+    posts = payload.get("posts")
+    if not isinstance(posts, list):
+        return False
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        value = post.get("value")
+        if not isinstance(value, list):
+            continue
+        for block in value:
+            if not isinstance(block, dict):
+                continue
+            images = block.get("image")
+            if isinstance(images, dict):
+                images = [images]
+            if not isinstance(images, list):
+                continue
+            if any(isinstance(item, dict) and str(item.get("path") or "").strip() for item in images):
+                return True
+    return False
+
+
 class InstagramMediaPrepareService:
     """Download, normalize, and re-host media for Instagram / Postiz publishing."""
 
@@ -322,7 +346,7 @@ class InstagramMediaPrepareService:
             from core.cloudstorage.service.storageservice import StorageService
 
             self._storage = StorageService()
-        self._cache: Dict[Tuple[str, CropMode], str] = {}
+        self._cache: Dict[Tuple[str, CropMode, bool], str] = {}
 
     def _upload(self, data: bytes, file_name: str, content_type: str) -> str:
         self._storage.upload_file(
@@ -334,14 +358,14 @@ class InstagramMediaPrepareService:
         )
         return public_media_url(file_name)
 
-    def prepare_url(self, url: str, *, crop: CropMode = "feed") -> str:
+    def prepare_url(self, url: str, *, crop: CropMode = "feed", require_video: bool = False) -> str:
         source = (url or "").strip()
         if not source:
             raise InstagramMediaPrepareError("Media URL is empty")
         if is_prepared_public_url(source):
             return source
 
-        cache_key = (source, crop)
+        cache_key = (source, crop, require_video)
         cached = self._cache.get(cache_key)
         if cached:
             return cached
@@ -353,6 +377,11 @@ class InstagramMediaPrepareService:
             or is_video_url(source)
             or _looks_like_mp4(data)
         ) and not _looks_like_image(data)
+
+        if require_video and not treat_as_video:
+            raise InstagramMediaPrepareError(
+                "TikTok only accepts a video. Upload an MP4, or post this image to another account."
+            )
 
         if not treat_as_video:
             try:
@@ -395,6 +424,7 @@ class InstagramMediaPrepareService:
             settings = post.get("settings") if isinstance(post.get("settings"), dict) else {}
             type_name = str(settings.get("__type") or "").strip().lower()
             is_ig = type_name in INSTAGRAM_TYPES
+            is_tiktok = type_name == "tiktok"
             is_story = str(settings.get("post_type") or "").strip().lower() == "story"
             crop: CropMode = "story" if (is_ig and is_story) else ("feed" if is_ig else "none")
 
@@ -418,7 +448,11 @@ class InstagramMediaPrepareService:
                 prepared_items: List[Dict[str, Any]] = []
                 for index, item in enumerate(items):
                     original = str(item.get("path") or "").strip()
-                    new_path = self.prepare_url(original, crop=crop)
+                    if not original.lower().startswith(("http://", "https://")):
+                        raise InstagramMediaPrepareError(
+                            "Upload the file again before posting. This media link is only on this device."
+                        )
+                    new_path = self.prepare_url(original, crop=crop, require_video=is_tiktok)
                     prepared_items.append(
                         {
                             "id": item.get("id") or f"media_{index}",
