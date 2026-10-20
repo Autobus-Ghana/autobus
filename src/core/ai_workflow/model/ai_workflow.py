@@ -100,7 +100,7 @@ class AIWorkflowAssistantSettings(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="openai")
-    model: Mapped[str] = mapped_column(String(80), nullable=False, default="gpt-6.1-sol")
+    model: Mapped[str] = mapped_column(String(120), nullable=False, default="openai/gpt-oss-120b")
     api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
