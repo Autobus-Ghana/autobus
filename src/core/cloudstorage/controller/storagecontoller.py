@@ -115,13 +115,44 @@ def _job_status_response(record) -> RagIndexJobStatusResponse:
     )
 
 
+_POSTIZ_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4"}
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".qt"}
+
+
+def postiz_safe_object_name(filename: str | None, content_type: str | None) -> str:
+    """Store uploads under a lowercase extension Postiz will accept.
+
+    The mobile app uploads posting media as ``marketing-image.jpg`` or
+    ``marketing-video.mp4``. Browser uploads kept names like ``.JPG`` or
+    ``.MOV``, and Postiz rejects those before the post is created.
+    """
+    base = os.path.basename(filename or "") or "upload"
+    stem, ext = os.path.splitext(base)
+    stem = stem or "upload"
+    ext_l = ext.lower()
+    if ext_l in _POSTIZ_EXTENSIONS:
+        return f"{stem}{ext_l}"
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    if ctype.startswith("video/") or ext_l in _VIDEO_EXTENSIONS:
+        return f"{stem}.mp4"
+    if "png" in ctype:
+        return f"{stem}.png"
+    if "webp" in ctype:
+        return f"{stem}.webp"
+    if "gif" in ctype:
+        return f"{stem}.gif"
+    if ctype.startswith("image/") or ext_l in {".heic", ".heif", ".bmp", ".tif", ".tiff"}:
+        return f"{stem}.jpg"
+    return base or "upload"
+
+
 @storage_routes.post("/upload", response_model=FileDTO)
 async def upload_file(
     file: UploadFile,
     folder: Optional[StorageFolder] = Query(None),
     authjwt: AuthJWT = Depends(validate_token),
 ):
-    safe_name = os.path.basename(file.filename)
+    safe_name = postiz_safe_object_name(file.filename, file.content_type)
     content_type = file.content_type or ""
     is_video = content_type.startswith("video/") or safe_name.lower().endswith(
         (".mp4", ".mov", ".m4v", ".webm")
