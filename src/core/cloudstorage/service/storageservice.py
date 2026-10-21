@@ -75,6 +75,8 @@ class StorageFolder(str, Enum):
     records_files = "records-files"
     generated_images = "generated-images"
     generated_videos = "generated-videos"
+    digital_marketing = "digital-marketing"
+    automedia = "automedia"
     instagram_publish = "instagram-publish"
 
 
