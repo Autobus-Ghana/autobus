@@ -9,11 +9,54 @@ from core.socialmedia.service.zernio_mapping import (
     creator_info_for_ui,
     inbox_message_parts,
     publish_status_for_ui,
+    should_retry_zernio,
     verify_webhook_signature,
+    zernio_id,
 )
 
 
 class ZernioMappingTests(unittest.TestCase):
+    def test_post_retries_only_with_idempotency_key(self):
+        self.assertTrue(
+            should_retry_zernio(
+                method="POST",
+                status_code=None,
+                has_idempotency_key=True,
+                attempt=0,
+            )
+        )
+        self.assertFalse(
+            should_retry_zernio(
+                method="POST",
+                status_code=502,
+                has_idempotency_key=False,
+                attempt=0,
+            )
+        )
+        self.assertTrue(
+            should_retry_zernio(
+                method="GET",
+                status_code=503,
+                has_idempotency_key=False,
+                attempt=1,
+            )
+        )
+        self.assertFalse(
+            should_retry_zernio(
+                method="GET",
+                status_code=400,
+                has_idempotency_key=False,
+                attempt=0,
+            )
+        )
+
+    def test_zernio_id_reads_nested_profile(self):
+        self.assertEqual(zernio_id("6ae174e91584588f2c803827"), "6ae174e91584588f2c803827")
+        self.assertEqual(
+            zernio_id({"_id": "6ae174e91584588f2c803827", "name": "Shop", "externalId": "user"}),
+            "6ae174e91584588f2c803827",
+        )
+        self.assertEqual(zernio_id(None), "")
     def test_post_body_maps_tiktok_and_instagram(self):
         body = build_create_post_body(
             [
@@ -73,7 +116,19 @@ class ZernioMappingTests(unittest.TestCase):
             }
         )
         self.assertEqual(info["creator_nickname"], "Shop")
-        self.assertEqual(info["privacy_level_options"], ["PUBLIC_TO_EVERYONE", "SELF_ONLY"])
+        self.assertEqual(
+            info["privacy_level_options"][:2],
+            ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
+        )
+        self.assertEqual(
+            set(info["privacy_level_options"]),
+            {
+                "PUBLIC_TO_EVERYONE",
+                "SELF_ONLY",
+                "MUTUAL_FOLLOW_FRIENDS",
+                "FOLLOWER_OF_CREATOR",
+            },
+        )
         self.assertTrue(info["comment_disabled"])
         self.assertFalse(info["duet_disabled"])
         self.assertTrue(info["stitch_disabled"])

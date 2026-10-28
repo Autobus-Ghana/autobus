@@ -18,6 +18,8 @@ from urllib.error import URLError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from core.credits.model.credit_types import CreditType
+from core.credits.service.credit_service import CreditService
 from core.embed.model.embed import EmbedIntegration, EmbedMessageReceipt
 from core.embed.scope import for_sub_business, session_user_id
 from core.embed.turn_context import begin_embed_turn, end_embed_turn
@@ -215,10 +217,18 @@ class EmbedService:
             }
         )
         try:
-            nlu = get_nlu_system()
-            reply = nlu.process_message(nlu_user_id, text, image_url=image_url or None) or ""
-            reply_images = nlu.take_reply_images()
-            actions = end_embed_turn(tokens)
+            paused = CreditService(self.db).consume_or_pause(
+                row.user_id, CreditType.LLM.value, 1.0, "embed_chat"
+            )
+            if paused:
+                reply = paused
+                reply_images = []
+                actions = end_embed_turn(tokens)
+            else:
+                nlu = get_nlu_system()
+                reply = nlu.process_message(nlu_user_id, text, image_url=image_url or None) or ""
+                reply_images = nlu.take_reply_images()
+                actions = end_embed_turn(tokens)
         except Exception:
             end_embed_turn(tokens)
             raise

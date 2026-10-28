@@ -27,6 +27,7 @@ from core.socialmedia.service.zernio_mapping import (
     ZERNIO_PLATFORMS,
     account_connected_parts,
     build_create_post_body,
+    zernio_id,
     creator_info_for_ui,
     direct_instagram_post_body,
     inbox_message_parts,
@@ -35,6 +36,8 @@ from core.socialmedia.service.zernio_mapping import (
     publish_status_for_ui,
     verify_webhook_signature,
 )
+from core.credits.model.credit_types import CreditType
+from core.credits.service.credit_service import CreditService
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
@@ -264,7 +267,11 @@ def sync_accounts_from_zernio(db: Session, user_id: str) -> List[ZernioAccount]:
     for item in remote:
         if not isinstance(item, dict):
             continue
-        account_id = str(item.get("_id") or item.get("id") or item.get("accountId") or "").strip()
+        account_id = (
+            zernio_id(item.get("_id"))
+            or zernio_id(item.get("id"))
+            or zernio_id(item.get("accountId"))
+        )
         platform = str(item.get("platform") or "").strip().lower()
         if not account_id or platform not in ZERNIO_PLATFORMS:
             continue
@@ -272,7 +279,7 @@ def sync_accounts_from_zernio(db: Session, user_id: str) -> List[ZernioAccount]:
         _upsert_account(
             db,
             user_id=user_id,
-            profile_id=str(item.get("profileId") or profile.zernio_profile_id),
+            profile_id=zernio_id(item.get("profileId")) or profile.zernio_profile_id,
             account_id=account_id,
             platform=platform,
             username=str(item.get("username") or "").strip(),
@@ -311,15 +318,15 @@ def record_callback_account(
     )
     try:
         sync_accounts_from_zernio(db, user_id)
-        refreshed = (
-            db.query(ZernioAccount)
-            .filter(ZernioAccount.zernio_account_id == account_id)
-            .first()
-        )
-        return refreshed or row
     except Exception as exc:
         logger.warning("[ZERNIO] account refresh after connect failed: %s", exc)
-        return row
+        db.rollback()
+    refreshed = (
+        db.query(ZernioAccount)
+        .filter(ZernioAccount.zernio_account_id == account_id)
+        .first()
+    )
+    return refreshed or row
 
 
 def list_accounts(db: Session, user_id: str, platform: str = "") -> List[ZernioAccount]:
@@ -637,14 +644,19 @@ def handle_inbox_message(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]
     )
 
     nlu = get_nlu_system()
-    reply = nlu.process_message(autobus_key, text, image_url=image_url or None)
+    paused = CreditService(db).consume_or_pause(merchant_id, CreditType.LLM.value, 1.0, "zernio_inbox")
+    if paused:
+        reply = paused
+        reply_images = []
+    else:
+        reply = nlu.process_message(autobus_key, text, image_url=image_url or None)
+        reply_images = nlu.take_reply_images()
     _remember_customer_identity(
         autobus_key,
         username=parts["sender_username"] or None,
         display_name=parts["sender_name"] or None,
     )
     outbound = _nlu_reply_text(reply)
-    reply_images = nlu.take_reply_images()
     if outbound or reply_images:
         send_thread_reply(db, autobus_key, outbound, reply_images[0] if reply_images else "")
         for extra in reply_images[1:]:

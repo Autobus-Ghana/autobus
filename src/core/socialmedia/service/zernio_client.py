@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Dict, Optional
 
 import httpx
+
+from core.socialmedia.service.zernio_mapping import should_retry_zernio
 
 logger = logging.getLogger(__name__)
 
@@ -59,26 +62,56 @@ class ZernioClient:
         if not self.api_key:
             raise ZernioAPIError("ZERNIO_API_KEY is not configured", status_code=400)
         url = path if path.startswith("http") else f"{self.base_url}/{path.lstrip('/')}"
-        try:
-            response = httpx.request(
-                method,
-                url,
-                params=params,
-                json=json_body,
-                headers=self._headers(headers),
-                timeout=timeout,
-            )
-        except httpx.HTTPError as exc:
-            raise ZernioAPIError(f"Zernio request failed: {exc}", status_code=502) from exc
+        request_headers = self._headers(headers)
+        has_idempotency = bool((request_headers.get("Idempotency-Key") or "").strip())
+        attempt = 0
+        while True:
+            try:
+                response = httpx.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers=request_headers,
+                    timeout=timeout,
+                )
+            except httpx.HTTPError as exc:
+                if should_retry_zernio(
+                    method=method,
+                    status_code=None,
+                    has_idempotency_key=has_idempotency,
+                    attempt=attempt,
+                ):
+                    attempt += 1
+                    logger.warning("[ZERNIO] %s %s failed (%s); retrying", method, path, exc)
+                    time.sleep(0.4 * attempt)
+                    continue
+                raise ZernioAPIError(f"Zernio request failed: {exc}", status_code=502) from exc
 
-        try:
-            body = response.json()
-        except Exception:
-            body = {"message": (response.text or "")[:500]}
-        if not isinstance(body, dict):
-            body = {"value": body}
+            try:
+                body = response.json()
+            except Exception:
+                body = {"message": (response.text or "")[:500]}
+            if not isinstance(body, dict):
+                body = {"value": body}
 
-        if response.status_code >= 400:
+            if response.status_code < 400:
+                return body
+            if should_retry_zernio(
+                method=method,
+                status_code=response.status_code,
+                has_idempotency_key=has_idempotency,
+                attempt=attempt,
+            ):
+                attempt += 1
+                logger.warning(
+                    "[ZERNIO] %s %s returned %s; retrying",
+                    method,
+                    path,
+                    response.status_code,
+                )
+                time.sleep(0.4 * attempt)
+                continue
             message = str(body.get("error") or body.get("message") or response.text[:400])
             code = str(body.get("code") or "")
             raise ZernioAPIError(
@@ -87,7 +120,6 @@ class ZernioClient:
                 code=code,
                 body=body,
             )
-        return body
 
     def create_profile(self, *, name: str, external_id: str) -> Dict[str, Any]:
         return self.request(

@@ -94,14 +94,7 @@ class OwnerCopilotService:
             )
 
         credits = CreditService(self.db)
-        if not credits.has_credits(user.id, CreditType.LLM.value):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "message": "Insufficient credits for LLM Chats. Buy more credits to continue.",
-                    "credit_type": CreditType.LLM.value,
-                },
-            )
+        credits.assert_can_spend(user.id, CreditType.LLM.value, 1.0)
 
         prompt = _OWNER_SYSTEM_PROMPT.format(context=context.as_prompt_block())
         llm_history = _llm_history(history)

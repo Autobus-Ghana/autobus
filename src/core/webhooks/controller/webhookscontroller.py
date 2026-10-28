@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 import logging
 import os
+from core.credits.model.credit_types import CreditType
+from core.credits.service.credit_service import CreditService
 from core.user.model.User import User
 from core.nlu.nlu import get_nlu_system
 from core.webhooks.service.whatsapp_service import WhatsAppService
@@ -800,7 +802,15 @@ def handle_instagram_webhook(payload: dict, db: Session):
         svc.send_sender_action(token, sender_id, "mark_seen")
         svc.send_sender_action(token, sender_id, "typing_on")
         nlu_system = get_nlu_system()
-        reply = nlu_system.process_message(nlu_user_id, text, image_url=image_url or None)
+        paused = CreditService(db).consume_or_pause(
+            account.user_id, CreditType.LLM.value, 1.0, "instagram_inbound"
+        )
+        if paused:
+            reply = paused
+            reply_images = []
+        else:
+            reply = nlu_system.process_message(nlu_user_id, text, image_url=image_url or None)
+            reply_images = nlu_system.take_reply_images()
         username, display_name = _ig_event_profile(event)
         if not username:
             profile = svc.fetch_igsid_profile(token, sender_id)
@@ -810,7 +820,6 @@ def handle_instagram_webhook(payload: dict, db: Session):
             nlu_user_id, username=username, display_name=display_name
         )
         outbound = _nlu_reply_text(reply)
-        reply_images = nlu_system.take_reply_images()
         if not outbound and not reply_images:
             svc.send_sender_action(token, sender_id, "typing_off")
             handled += 1
@@ -868,7 +877,11 @@ async def handle_simple_chat(
             logger.info("Processing simple chat (legacy key) customer=%s", cust[:32])
 
         nlu_system = get_nlu_system()
-        response_message = nlu_system.process_message(nlu_user_id, msg)
+        paused = CreditService(db).consume_or_pause(comp, CreditType.LLM.value, 1.0, "simple_chat")
+        if paused:
+            response_message = paused
+        else:
+            response_message = nlu_system.process_message(nlu_user_id, msg)
         from core.conversationmanager.service.customer_identity import looks_like_phone
 
         if looks_like_phone(cust):
@@ -1077,10 +1090,18 @@ def handle_text_message(
     logger.info("Processing message through NLU for %s", nlu_user_id)
 
     nlu_system = get_nlu_system()
-    response_message = nlu_system.process_message(nlu_user_id, message_text)
+    _, merchant = _whatsapp_merchant_user(phone_id, db)
+    paused = CreditService(db).consume_or_pause(
+        merchant.id if merchant else None, CreditType.LLM.value, 1.0, "whatsapp_inbound"
+    )
+    if paused:
+        response_message = paused
+        reply_images = []
+    else:
+        response_message = nlu_system.process_message(nlu_user_id, message_text)
+        reply_images = nlu_system.take_reply_images()
     _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
     outbound = _nlu_reply_text(response_message)
-    reply_images = nlu_system.take_reply_images()
 
     logger.info("Generated response: %s", outbound[:200])
 
@@ -1318,14 +1339,22 @@ def handle_image_message(
             user_message = "I am providing you with an image. The image is referenced below, use it to infer the user's intent and extract slots."
             logger.info("No caption provided with image, using default message")
 
-        response_message = nlu_system.process_message(
-            nlu_user_id,
-            user_message,
-            image_media_id=media_id,
+        _, merchant = _whatsapp_merchant_user(phone_id, db)
+        paused = CreditService(db).consume_or_pause(
+            merchant.id if merchant else None, CreditType.LLM.value, 1.0, "whatsapp_image"
         )
+        if paused:
+            response_message = paused
+            reply_images = []
+        else:
+            response_message = nlu_system.process_message(
+                nlu_user_id,
+                user_message,
+                image_media_id=media_id,
+            )
+            reply_images = nlu_system.take_reply_images()
         _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
         outbound = _nlu_reply_text(response_message)
-        reply_images = nlu_system.take_reply_images()
 
         logger.info("Generated response for image message: %s", outbound[:200])
 
@@ -1386,14 +1415,22 @@ def handle_audio_message(
             user_message = "I'm sending you an audio message."
             logger.info("No caption provided with audio, using default message")
 
-        response_message = nlu_system.process_message(
-            nlu_user_id,
-            user_message,
-            audio_media_id=media_id,
+        _, merchant = _whatsapp_merchant_user(phone_id, db)
+        paused = CreditService(db).consume_or_pause(
+            merchant.id if merchant else None, CreditType.LLM.value, 1.0, "whatsapp_audio"
         )
+        if paused:
+            response_message = paused
+            reply_images = []
+        else:
+            response_message = nlu_system.process_message(
+                nlu_user_id,
+                user_message,
+                audio_media_id=media_id,
+            )
+            reply_images = nlu_system.take_reply_images()
         _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
         outbound = _nlu_reply_text(response_message)
-        reply_images = nlu_system.take_reply_images()
 
         logger.info("Generated response for audio message: %s", outbound[:200])
 

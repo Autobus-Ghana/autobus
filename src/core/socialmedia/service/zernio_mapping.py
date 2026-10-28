@@ -82,6 +82,34 @@ def _first_str(*values: Any) -> str:
     return ""
 
 
+RETRYABLE_ZERNIO_STATUS = {408, 429, 502, 503, 504}
+
+
+def should_retry_zernio(
+    *,
+    method: str,
+    status_code: Optional[int],
+    has_idempotency_key: bool,
+    attempt: int,
+    max_attempts: int = 3,
+) -> bool:
+    """Retry transport failures and gateway errors. Posts retry only with an idempotency key."""
+    if attempt + 1 >= max_attempts:
+        return False
+    if method.upper() not in {"GET", "HEAD"} and not has_idempotency_key:
+        return False
+    if status_code is None:
+        return True
+    return status_code in RETRYABLE_ZERNIO_STATUS
+
+
+def zernio_id(value: Any) -> str:
+    """Zernio sometimes returns an id as a string and sometimes as ``{_id, name}``."""
+    if isinstance(value, dict):
+        return _first_str(value.get("_id"), value.get("id"), value.get("accountId"))
+    return _first_str(value)
+
+
 def post_content(post: Dict[str, Any]) -> str:
     for block in post.get("value") or []:
         if isinstance(block, dict):
@@ -255,6 +283,16 @@ def creator_info_for_ui(payload: Dict[str, Any], *, fallback_name: str = "", fal
                 value = _first_str(item.get("value"), item.get("privacy_level"))
                 if value:
                     privacy.append(value)
+    # TikTok often returns only Public when the account is new. The composer
+    # still needs Friends, Followers, and Only me.
+    for level in (
+        "PUBLIC_TO_EVERYONE",
+        "MUTUAL_FOLLOW_FRIENDS",
+        "FOLLOWER_OF_CREATOR",
+        "SELF_ONLY",
+    ):
+        if level not in privacy:
+            privacy.append(level)
 
     limits = _as_dict(payload.get("postingLimits") or payload.get("posting_limits"))
     interactions = _as_dict(limits.get("interactionSettings") or limits.get("interaction_settings"))

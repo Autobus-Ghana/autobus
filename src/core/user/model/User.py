@@ -111,6 +111,9 @@ class User(Base):
     )
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Stable invite code. Null until the first profile read or signup grant.
+    referral_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, unique=True, index=True)
+    referred_by_user_id: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     # Platform admin portal role: super_admin | admin | support. Null = merchant user.
     platform_role: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     # When set, this user is a linked business managed from another login.

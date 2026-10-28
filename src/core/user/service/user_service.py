@@ -33,8 +33,15 @@ class UserService:
     def __init__(self, db: Session):
         self.db = db
 
-    @staticmethod
-    def _to_response(user: User) -> UserResponse:
+    def _to_response(self, user: User, include_referral: bool = False) -> UserResponse:
+        referral = {}
+        if include_referral:
+            try:
+                from core.credits.service.credit_service import CreditService
+
+                referral = CreditService(self.db).referral_profile(user)
+            except Exception as exc:
+                logger.warning("Referral profile skipped for %s: %s", user.id, exc)
         return UserResponse(
             id=user.id,
             fullname=user.fullname,
@@ -65,6 +72,12 @@ class UserService:
             currency_code=(getattr(user, "currency_code", None) or "GHS").upper(),
             sender_email=_sender_email_of(user),
             managed_by_user_id=getattr(user, "managed_by_user_id", None),
+            referral_code=referral.get("referral_code"),
+            referrals_invited=int(referral.get("referrals_invited") or 0),
+            referrals_joined=int(referral.get("referrals_joined") or 0),
+            referral_rewards=float(referral.get("referral_rewards") or 0),
+            referral_reward_credits=float(referral.get("referral_reward_credits") or 0),
+            referral_welcome_credits=float(referral.get("referral_welcome_credits") or 0),
             enabled=user.enabled,
             status=user.status,
             created_at=user.created_at,
@@ -78,20 +91,20 @@ class UserService:
             user = self.db.query(User).filter(User.id == identifier).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        return self._to_response(user)
+        return self._to_response(user, include_referral=True)
 
     def get_user_by_id(self, user_id: str) -> UserResponse:
         user = self.db.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        return self._to_response(user)
+        return self._to_response(user, include_referral=True)
 
     # get user by phone number
     def get_user_by_phone(self, phone: str) -> UserResponse:
         user = self.db.query(User).filter(User.phone == phone).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        return self._to_response(user)
+        return self._to_response(user, include_referral=True)
     
     def set_user_enabled_status(self, user_id: str, enabled: bool) -> MessageResponse:
         user = self.db.query(User).filter(User.id == user_id).first()

@@ -12,6 +12,9 @@ class CreditType(str, Enum):
     EMAIL = "email"
     SMS = "sms"
     STORAGE_MB = "storage_mb"
+    MEDIA_SAVE = "media_save"
+    SOCIAL_POST = "social_post"
+    VIDEO_CONCAT = "video_concat"
     SERVER = "server"
 
 
@@ -23,6 +26,9 @@ CREDIT_TYPE_LABELS: Dict[str, str] = {
     CreditType.EMAIL.value: "Email",
     CreditType.SMS.value: "SMS",
     CreditType.STORAGE_MB.value: "Storage (MB)",
+    CreditType.MEDIA_SAVE.value: "Saving Media",
+    CreditType.SOCIAL_POST.value: "Social Posts",
+    CreditType.VIDEO_CONCAT.value: "Video Assembly",
     CreditType.SERVER.value: "Server Requests",
 }
 

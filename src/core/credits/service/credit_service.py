@@ -1,26 +1,32 @@
 import json
 import logging
+import re
+import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.credits.credit_catalog import (
+    CREDIT_ACTIVITIES,
     FEATURE_CREDIT_COSTS,
-    STARTER_CREDIT_GRANT,
     WALLET_CREDIT_TYPE,
     feature_cost,
+    format_credits,
     get_pack,
     packs_public,
 )
 from core.credits.model.credit_purchase import CreditPurchase
-from core.credits.model.credit_types import CREDIT_TYPE_LABELS, ALL_CREDIT_TYPES
+from core.credits.model.credit_types import ALL_CREDIT_TYPES, CREDIT_TYPE_LABELS
 from core.credits.model.credit_usage_log import CreditUsageLog
 from core.credits.model.user_credit_balance import UserCreditBalance
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
+
+CUSTOMER_CHANNEL_PAUSED = "Thanks for your message. This assistant is paused right now."
 
 _WALLET_PERIOD_START = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _WALLET_PERIOD_END = datetime(2099, 1, 1, tzinfo=timezone.utc)
@@ -74,7 +80,7 @@ class CreditService:
     def _legacy_wallet_value(self, user_id: str) -> float:
         total = 0.0
         for row in self._legacy_category_rows(user_id):
-            unit = float(FEATURE_CREDIT_COSTS.get(row.credit_type, 0.0))
+            unit = float(self._costs().get(row.credit_type, FEATURE_CREDIT_COSTS.get(row.credit_type, 0.0)))
             total += max(0.0, float(row.remaining or 0)) * unit
         return total
 
@@ -105,11 +111,8 @@ class CreditService:
         if converted > 0:
             return self._create_wallet(user_id, converted, allocated=converted)
 
-        return self._create_wallet(
-            user_id,
-            STARTER_CREDIT_GRANT,
-            allocated=STARTER_CREDIT_GRANT,
-        )
+        grant = self._free_credits()
+        return self._create_wallet(user_id, grant, allocated=grant)
 
     def grant_starter_credits(self, user_id: str) -> None:
         """Idempotent signup grant."""
@@ -269,9 +272,10 @@ class CreditService:
         allocated = float(wallet.allocated)
         used = max(0.0, allocated - remaining)
 
+        costs = self._costs()
         credits: Dict[str, Dict[str, Any]] = {}
         for credit_type in ALL_CREDIT_TYPES:
-            unit = float(FEATURE_CREDIT_COSTS.get(credit_type, 1.0))
+            unit = float(costs.get(credit_type, FEATURE_CREDIT_COSTS.get(credit_type, 1.0)))
             actions = remaining / unit if unit > 0 else remaining
             credits[credit_type] = {
                 "credit_type": credit_type,
@@ -294,7 +298,7 @@ class CreditService:
                 "allocated": allocated,
                 "used": used,
             },
-            "costs": dict(FEATURE_CREDIT_COSTS),
+            "costs": costs,
             "packs": packs_public(),
             "credits": credits,
         }
@@ -303,17 +307,83 @@ class CreditService:
         wallet = self.ensure_wallet(user_id)
         if credit_type == WALLET_CREDIT_TYPE:
             return float(wallet.remaining)
-        unit = feature_cost(credit_type, 1.0)
+        unit = feature_cost(credit_type, 1.0, self._costs())
         if unit <= 0:
             return float("inf")
         return float(wallet.remaining) / unit
 
     def has_credits(self, user_id: str, credit_type: str, amount: float = 1.0) -> bool:
-        needed = feature_cost(credit_type, amount)
+        needed = feature_cost(credit_type, amount, self._costs())
         if needed <= 0:
             return True
         wallet = self.ensure_wallet(user_id)
         return float(wallet.remaining) >= needed
+
+    def assert_can_spend(self, user_id: str, credit_type: str, amount: float = 1.0) -> None:
+        """Raise a detailed 402 without deducting, so a failed call is not billed."""
+        user_id = self._ensure_internal_user_id(user_id)
+        costs = self._costs()
+        needed = feature_cost(credit_type, amount, costs)
+        if needed <= 0:
+            return
+        wallet = self.ensure_wallet(user_id)
+        if float(wallet.remaining) < needed:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=self.shortage_detail(
+                    credit_type,
+                    remaining=float(wallet.remaining),
+                    required=needed,
+                    amount=amount,
+                    unit_cost=feature_cost(credit_type, 1.0, costs),
+                ),
+            )
+
+    def shortage_detail(
+        self,
+        credit_type: str,
+        *,
+        remaining: float,
+        required: float,
+        amount: float = 1.0,
+        unit_cost: Optional[float] = None,
+        includes_extras: bool = False,
+    ) -> Dict[str, Any]:
+        verb, noun, unit_name = CREDIT_ACTIVITIES.get(
+            credit_type,
+            (
+                f"use {CREDIT_TYPE_LABELS.get(credit_type, credit_type)}",
+                CREDIT_TYPE_LABELS.get(credit_type, credit_type),
+                "use",
+            ),
+        )
+        unit = feature_cost(credit_type, 1.0, self._costs()) if unit_cost is None else float(unit_cost)
+        shortfall = max(0.0, float(required) - float(remaining))
+        if includes_extras:
+            body = (
+                f"This generation and its references need {format_credits(required)} credits."
+            )
+        else:
+            body = (
+                f"{noun} costs {format_credits(unit)} credits per {unit_name}. "
+                f"This action needs {format_credits(required)} credits."
+            )
+        message = (
+            f"You can't {verb} because you don't have enough credits. "
+            f"{body} You have {format_credits(remaining)} credits left, "
+            f"so you need {format_credits(shortfall)} more. Buy more credits to continue."
+        )
+        return {
+            "code": "insufficient_credits",
+            "message": message,
+            "activity": noun,
+            "credit_type": credit_type,
+            "required": float(required),
+            "remaining": float(remaining),
+            "shortfall": shortfall,
+            "unit_cost": unit,
+            "amount": float(amount),
+        }
 
     def check_and_deduct(
         self,
@@ -325,20 +395,21 @@ class CreditService:
         raise_on_insufficient: bool = True,
     ) -> bool:
         user_id = self._ensure_internal_user_id(user_id)
-        needed = feature_cost(credit_type, amount)
+        costs = self._costs()
+        needed = feature_cost(credit_type, amount, costs)
         wallet = self.ensure_wallet(user_id)
 
         if needed > 0 and float(wallet.remaining) < needed:
             if raise_on_insufficient:
-                label = CREDIT_TYPE_LABELS.get(credit_type, credit_type)
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail={
-                        "message": f"Insufficient credits for {label}. Buy more credits to continue.",
-                        "credit_type": credit_type,
-                        "remaining": wallet.remaining,
-                        "required": needed,
-                    },
+                    detail=self.shortage_detail(
+                        credit_type,
+                        remaining=float(wallet.remaining),
+                        required=needed,
+                        amount=amount,
+                        unit_cost=feature_cost(credit_type, 1.0, costs),
+                    ),
                 )
             return False
 
@@ -376,6 +447,169 @@ class CreditService:
             raise_on_insufficient=True,
         )
 
+    def require_charges(
+        self,
+        user_id: str,
+        charges: Sequence[tuple[str, float, str]],
+        *,
+        primary_type: Optional[str] = None,
+    ) -> None:
+        """Check the combined cost, then deduct each charge in one commit."""
+        user_id = self._ensure_internal_user_id(user_id)
+        costs = self._costs()
+        wallet = self.ensure_wallet(user_id)
+        normalized: list[tuple[str, float, str, float]] = []
+        needed = 0.0
+        for credit_type, amount, operation in charges:
+            cost = feature_cost(credit_type, amount, costs)
+            needed += cost
+            normalized.append((credit_type, float(amount), operation, cost))
+
+        if needed > 0 and float(wallet.remaining) < needed:
+            primary = primary_type or (charges[0][0] if charges else WALLET_CREDIT_TYPE)
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=self.shortage_detail(
+                    primary,
+                    remaining=float(wallet.remaining),
+                    required=needed,
+                    amount=sum(amount for _, amount, _ in charges) or 1.0,
+                    unit_cost=feature_cost(primary, 1.0, costs),
+                    includes_extras=len(charges) > 1,
+                ),
+            )
+
+        for credit_type, amount, operation, cost in normalized:
+            if cost > 0:
+                wallet.remaining = max(0.0, float(wallet.remaining) - cost)
+                wallet.updated_at = datetime.now(timezone.utc)
+            log_meta = {"feature": credit_type, "wallet_cost": cost, "units": amount}
+            self.db.add(
+                CreditUsageLog(
+                    user_id=user_id,
+                    credit_type=credit_type,
+                    amount=cost,
+                    operation=operation,
+                    metadata_json=json.dumps(log_meta),
+                )
+            )
+        self.db.commit()
+
+    def consume_or_pause(
+        self,
+        user_id: Optional[str],
+        credit_type: str,
+        amount: float = 1.0,
+        operation: str = "inbound_llm",
+    ) -> Optional[str]:
+        """Deduct for a customer-channel reply. Return a pause line when the wallet is short."""
+        if not user_id:
+            return None
+        resolved = self.resolve_user_id(user_id)
+        if not resolved:
+            return None
+        if not self.has_credits(resolved, credit_type, amount):
+            logger.info("Paused %s for %s: not enough credits", operation, resolved)
+            return CUSTOMER_CHANNEL_PAUSED
+        self.require_credits(resolved, credit_type, amount, operation)
+        return None
+
+    def _costs(self) -> Dict[str, float]:
+        from core.credits.service.credit_pricing_service import CreditPricingService
+
+        return CreditPricingService(self.db).cost_map()
+
+    def _free_credits(self) -> float:
+        from core.credits.service.credit_pricing_service import CreditPricingService
+
+        return float(CreditPricingService(self.db).grants()["free_credits"])
+
+    def _grant_amounts(self) -> Dict[str, float]:
+        from core.credits.service.credit_pricing_service import CreditPricingService
+
+        return CreditPricingService(self.db).grants()
+
+    def ensure_referral_code(self, user: User) -> str:
+        existing = (getattr(user, "referral_code", None) or "").strip()
+        if existing:
+            return existing
+        candidate = _preview_referral_code(user)
+        taken = (
+            self.db.query(User)
+            .filter(User.referral_code == candidate, User.id != user.id)
+            .first()
+        )
+        if taken:
+            candidate = secrets.token_hex(4).upper()
+        user.referral_code = candidate
+        self.db.commit()
+        self.db.refresh(user)
+        return candidate
+
+    def apply_referral(self, user_id: str, code: Optional[str]) -> None:
+        raw = (code or "").strip().upper()
+        if not raw:
+            return
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user or getattr(user, "referred_by_user_id", None):
+            return
+        referrer = (
+            self.db.query(User)
+            .filter(func.upper(User.referral_code) == raw, User.id != user.id)
+            .first()
+        )
+        if not referrer:
+            logger.info("Signup referral code %s did not match a user", raw)
+            return
+        user.referred_by_user_id = referrer.id
+        self.db.commit()
+        grants = self._grant_amounts()
+        welcome = float(grants.get("referral_referee_credits") or 0)
+        reward = float(grants.get("referral_referrer_credits") or 0)
+        if welcome > 0:
+            self.add_credits(
+                user.id,
+                welcome,
+                operation="referral_welcome",
+                metadata={"referrer_id": referrer.id},
+            )
+        if reward > 0:
+            self.add_credits(
+                referrer.id,
+                reward,
+                operation="referral_reward",
+                metadata={"referee_id": user.id},
+            )
+
+    def referral_profile(self, user: User) -> Dict[str, Any]:
+        code = self.ensure_referral_code(user)
+        invited = (
+            self.db.query(User).filter(User.referred_by_user_id == user.id).count()
+        )
+        joined = (
+            self.db.query(User)
+            .filter(User.referred_by_user_id == user.id, User.enabled.is_(True))
+            .count()
+        )
+        rewarded = (
+            self.db.query(func.coalesce(func.sum(CreditUsageLog.amount), 0.0))
+            .filter(
+                CreditUsageLog.user_id == user.id,
+                CreditUsageLog.operation == "referral_reward",
+            )
+            .scalar()
+        )
+        earned = max(0.0, -float(rewarded or 0))
+        grants = self._grant_amounts()
+        return {
+            "referral_code": code,
+            "referrals_invited": invited,
+            "referrals_joined": joined,
+            "referral_rewards": earned,
+            "referral_reward_credits": float(grants.get("referral_referrer_credits") or 0),
+            "referral_welcome_credits": float(grants.get("referral_referee_credits") or 0),
+        }
+
     # Legacy no-ops so older callers / startup hooks stay safe.
     def get_plan_allocations(self, plan) -> Dict[str, float]:
         return {}
@@ -385,3 +619,14 @@ class CreditService:
 
     def initialize_credits_for_subscription(self, user_id: str, subscription=None) -> None:
         self.grant_starter_credits(user_id)
+
+
+def _preview_referral_code(user: User) -> str:
+    """Match the app's preview code so codes shared before this column existed still resolve."""
+    name = re.sub(r"[^A-Z0-9]", "", (user.fullname or "AUTOBUS").upper())
+    prefix = (name or "AUTOBUS").ljust(4, "X")[:4]
+    digits = re.sub(r"[^0-9]", "", user.id or "")
+    if not digits:
+        digits = str(abs(hash(name)) % 10000)
+    suffix = digits.rjust(4, "0")[-4:]
+    return f"{prefix}{suffix}"

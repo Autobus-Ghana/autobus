@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from core.agent.dto.media_generation_request import MediaGenerationRequest
-from core.credits.credit_catalog import feature_cost
 from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
 from core.user.controller.usercontroller import get_db, validate_token
@@ -77,35 +76,14 @@ def _deduct_generation_credits(
     references: list[tuple[str, str]],
 ) -> None:
     """Charge the generation plus one extra feature unit per attached reference."""
-    credit_service = CreditService(db)
     user_id = _resolve_credit_user(db, authjwt, req_user_id)
-
-    charges: list[tuple[str, str]] = [(credit_type, operation)]
+    charges: list[tuple[str, float, str]] = [(credit_type, 1.0, operation)]
     for _, mime in references:
         if is_video_mime(mime):
-            charges.append((CreditType.VIDEO_GEN.value, "generation_reference"))
+            charges.append((CreditType.VIDEO_GEN.value, 1.0, "generation_reference"))
         else:
-            charges.append((CreditType.IMAGE_GEN.value, "generation_reference"))
-
-    needed = sum(feature_cost(kind, 1.0) for kind, _ in charges)
-    remaining = credit_service.get_remaining(user_id, "wallet")
-    if needed > 0 and remaining < needed:
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "message": (
-                    "Insufficient credits for this generation"
-                    + (" and its references" if references else "")
-                    + ". Buy more credits to continue."
-                ),
-                "credit_type": credit_type,
-                "remaining": remaining,
-                "required": needed,
-            },
-        )
-
-    for kind, op in charges:
-        credit_service.require_credits(user_id, kind, 1.0, op)
+            charges.append((CreditType.IMAGE_GEN.value, 1.0, "generation_reference"))
+    CreditService(db).require_charges(user_id, charges, primary_type=credit_type)
 
 
 def _jwt_subject(authjwt: AuthJWT | None) -> str | None:
@@ -281,7 +259,8 @@ async def concat_automedia_videos(
     authjwt: AuthJWT = Depends(validate_token),
 ):
     """Stitch generated scene clips into one MP4 for preview and social posting."""
-    automedia_library.resolve_library_user_id(db, authjwt)
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    CreditService(db).require_credits(user_id, CreditType.VIDEO_CONCAT.value, 1.0, "video_concat")
     from core.media.service.video_concat import VideoConcatError, concat_video_urls
 
     try:

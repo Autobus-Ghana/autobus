@@ -380,7 +380,7 @@ class InstagramMediaPrepareService:
 
         if require_video and not treat_as_video:
             raise InstagramMediaPrepareError(
-                "TikTok only accepts a video. Upload an MP4, or post this image to another account."
+                "TikTok only accepts a video. Please try a video instead of a photo."
             )
 
         if not treat_as_video:

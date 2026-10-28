@@ -95,7 +95,11 @@ class AuthService:
         """Create a new user in the database."""
         email = self.resolve_signup_email(request.email, request.phone)
         if self._green_account_presence(email) is True:
-            adopted = self._adopt_green_account(email, request.password)
+            adopted = self._adopt_green_account(
+                email,
+                request.password,
+                referral_code=getattr(request, "referral_code", None),
+            )
             if adopted is None:
                 raise GreenAccountExistsError()
             self._keep_signup_extras(adopted, request)
@@ -186,12 +190,11 @@ class AuthService:
         self.db.add_all(seed_notifications)
         self.db.commit()
         self.db.refresh(db_user)
-        try:
-            from core.credits.service.credit_service import CreditService
-
-            CreditService(self.db).grant_starter_credits(db_user.id)
-        except Exception as e:
-            logger.warning("Starter credits not granted for %s: %s", db_user.id, e)
+        self._grant_signup_credits(
+            db_user,
+            getattr(request, "referral_code", None),
+            new_account=True,
+        )
 
         otp_send_result = None
         try:
@@ -387,7 +390,24 @@ class AuthService:
         except Exception as exc:
             logger.warning("Green account publish failed for %s: %s", getattr(db_user, "id", ""), exc)
 
-    def _adopt_green_account(self, identifier: str, password: str) -> Optional[User]:
+    def _grant_signup_credits(self, user: User, referral_code: Optional[str], *, new_account: bool) -> None:
+        try:
+            from core.credits.service.credit_service import CreditService
+
+            credits = CreditService(self.db)
+            credits.grant_starter_credits(user.id)
+            credits.ensure_referral_code(user)
+            if new_account:
+                credits.apply_referral(user.id, referral_code)
+        except Exception as exc:
+            logger.warning("Signup credits not granted for %s: %s", getattr(user, "id", None), exc)
+
+    def _adopt_green_account(
+        self,
+        identifier: str,
+        password: str,
+        referral_code: Optional[str] = None,
+    ) -> Optional[User]:
         """Create or unlock the local user when the Green account password matches."""
         from core.auth.service.green_account_client import authenticate
         from core.user.model.User import UserStatus
@@ -436,12 +456,7 @@ class AuthService:
         self.db.add(db_user)
         self.db.commit()
         self.db.refresh(db_user)
-        try:
-            from core.credits.service.credit_service import CreditService
-
-            CreditService(self.db).grant_starter_credits(db_user.id)
-        except Exception as exc:
-            logger.warning("Starter credits not granted for adopted user %s: %s", db_user.id, exc)
+        self._grant_signup_credits(db_user, referral_code, new_account=True)
         self._publish_green_account(db_user)
         return db_user
 

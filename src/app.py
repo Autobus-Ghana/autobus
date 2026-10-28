@@ -159,6 +159,26 @@ async def lifespan(app: FastAPI):
                         )
                     )
                 logger.info("[APP_STARTUP] Added users.platform_role column")
+            if "referral_code" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN referral_code VARCHAR(16)"))
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code "
+                            "ON users (referral_code) WHERE referral_code IS NOT NULL"
+                        )
+                    )
+                logger.info("[APP_STARTUP] Added users.referral_code column")
+            if "referred_by_user_id" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN referred_by_user_id VARCHAR(20)"))
+                    conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_users_referred_by_user_id "
+                            "ON users (referred_by_user_id)"
+                        )
+                    )
+                logger.info("[APP_STARTUP] Added users.referred_by_user_id column")
             if "managed_by_user_id" not in user_cols:
                 with engine.begin() as conn:
                     conn.execute(
@@ -229,6 +249,9 @@ async def lifespan(app: FastAPI):
 
         db = SessionLocal()
         try:
+            from core.credits.service.credit_pricing_service import CreditPricingService
+
+            CreditPricingService(db).ensure_defaults()
             synced = CreditService(db).sync_plan_credit_allocations()
             if synced:
                 logger.info(f"[APP_STARTUP] Synced credit allocations for {synced} plan(s)")

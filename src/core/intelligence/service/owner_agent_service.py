@@ -138,14 +138,7 @@ class OwnerAgentService:
             )
 
         credits = CreditService(self.db)
-        if not credits.has_credits(user.id, CreditType.LLM.value):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "message": "Insufficient credits for LLM Chats. Buy more credits to continue.",
-                    "credit_type": CreditType.LLM.value,
-                },
-            )
+        credits.assert_can_spend(user.id, CreditType.LLM.value, 1.0)
 
         user_content = compose_user_content(text, request.attachments)
         self._remember(conv_key, "user", user_content)
@@ -190,22 +183,14 @@ class OwnerAgentService:
             "Do not claim success unless ok is true."
         )
         credits = CreditService(self.db)
-        if credits.has_credits(user.id, CreditType.LLM.value):
-            result = self._run_loop(user, follow)
-            credits.check_and_deduct(user.id, CreditType.LLM.value, 1.0, "owner_agent")
-            if result.actions:
-                result.actions.insert(0, AgentActionLog(tool=tool, ok=ok, detail=_action_detail(parsed, raw)))
-            else:
-                result.actions = [AgentActionLog(tool=tool, ok=ok, detail=_action_detail(parsed, raw))]
-            return result
-
-        reply = _action_detail(parsed, raw) if parsed else raw
-        self._remember(conv_key, "assistant", reply)
-        return AgentTurnResponse(
-            message=reply,
-            turn_type="reply",
-            actions=[AgentActionLog(tool=tool, ok=ok, detail=reply)],
-        )
+        credits.assert_can_spend(user.id, CreditType.LLM.value, 1.0)
+        result = self._run_loop(user, follow)
+        credits.check_and_deduct(user.id, CreditType.LLM.value, 1.0, "owner_agent")
+        if result.actions:
+            result.actions.insert(0, AgentActionLog(tool=tool, ok=ok, detail=_action_detail(parsed, raw)))
+        else:
+            result.actions = [AgentActionLog(tool=tool, ok=ok, detail=_action_detail(parsed, raw))]
+        return result
 
     def _resume_ask(self, user: User, conv_key: str, request: AgentTurnRequest) -> AgentTurnResponse:
         state = self.conversations.get_conversation_state(conv_key)
@@ -225,14 +210,7 @@ class OwnerAgentService:
         self._set_pending(conv_key, None)
 
         credits = CreditService(self.db)
-        if not credits.has_credits(user.id, CreditType.LLM.value):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "message": "Insufficient credits for LLM Chats. Buy more credits to continue.",
-                    "credit_type": CreditType.LLM.value,
-                },
-            )
+        credits.assert_can_spend(user.id, CreditType.LLM.value, 1.0)
         result = self._run_loop(user, wrapped, image_url=_first_image_url(request.attachments))
         credits.check_and_deduct(user.id, CreditType.LLM.value, 1.0, "owner_agent")
         return result

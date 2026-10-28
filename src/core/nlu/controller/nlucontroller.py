@@ -35,14 +35,7 @@ async def process_message(
         result = subscription_service.get_user_subscription_status(current_user.id)
 
         credit_service = CreditService(db)
-        if not credit_service.has_credits(current_user.id, CreditType.LLM.value):
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "message": "Insufficient credits for LLM Chats. Buy more credits to continue.",
-                    "credit_type": CreditType.LLM.value,
-                },
-            )
+        credit_service.assert_can_spend(current_user.id, CreditType.LLM.value, 1.0)
         credit_service.check_and_deduct(
             current_user.id,
             CreditType.LLM.value,
@@ -78,10 +71,12 @@ async def process_message(
 async def detect_intent(
     request: NLUDetectRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
     authjwt: AuthJWT = Depends(validate_token),
 ):
     """Classify intent with the NLU engine without executing handlers or mutating chat state."""
     try:
+        CreditService(db).require_credits(current_user.id, CreditType.LLM.value, 1.0, "nlu_detect")
         logger.info("Detecting intent for user %s", current_user.id)
         history = []
         for item in request.conversation or []:
@@ -100,6 +95,8 @@ async def detect_intent(
             "slots": slots or {},
             "missing_slots": missing_slots or [],
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error detecting intent: %s", e, exc_info=True)
         raise HTTPException(

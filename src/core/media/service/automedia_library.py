@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
 from core.media.dto.automedia_dto import (
     AutomediaAssetDto,
@@ -231,6 +232,13 @@ def _upsert_asset_row(
 def create_asset(
     db: Session, user_id: str, campaign_id: str, payload: AutomediaAssetDto
 ) -> AutomediaAssetDto:
+    existing = (
+        db.query(AutomediaAsset)
+        .filter(AutomediaAsset.id == payload.id, AutomediaAsset.user_id == user_id)
+        .first()
+    )
+    if existing is None:
+        CreditService(db).require_credits(user_id, CreditType.MEDIA_SAVE.value, 1.0, "media_save")
     row = _get_campaign(db, campaign_id, user_id)
     if row is None:
         db.add(

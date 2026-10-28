@@ -2,7 +2,8 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.admin.dto.admin_dto import (
@@ -37,7 +38,22 @@ from core.admin.dto.automation_request_dto import (
     UpdateAutomationRequestStatusPayload,
 )
 from core.admin.service.automation_request_service import AutomationRequestService
+from core.credits.credit_catalog import CREDIT_USD_VALUE
+from core.credits.service.credit_pricing_service import CreditPricingService
 from core.user.model.User import User
+
+
+class CreditGroupUpdateRequest(BaseModel):
+    credits_per_unit: float = Field(ge=0)
+    price_usd: float = Field(ge=0)
+    label: Optional[str] = None
+    description: Optional[str] = None
+
+
+class CreditGrantUpdateRequest(BaseModel):
+    free_credits: float = Field(ge=0)
+    referral_referrer_credits: float = Field(ge=0)
+    referral_referee_credits: float = Field(ge=0)
 
 admin_routes = APIRouter()
 public_ads_routes = APIRouter()
@@ -478,6 +494,57 @@ def delete_automation_request(
 ):
     _ = admin
     return AutomationRequestService(db).delete(request_id)
+
+
+@admin_routes.get("/credit-pricing")
+def get_credit_pricing(
+    days: int = Query(30, ge=1, le=365),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """API group prices, free/referral grants, and recent usage for monitoring."""
+    _ = admin
+    pricing = CreditPricingService(db)
+    return {
+        "groups": pricing.list_groups(),
+        "grants": pricing.grants(),
+        "usage": pricing.usage_summary(days),
+        "credit_usd_value": CREDIT_USD_VALUE,
+    }
+
+
+@admin_routes.put("/credit-pricing/groups/{group_key}")
+def update_credit_group(
+    group_key: str,
+    payload: CreditGroupUpdateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    try:
+        return CreditPricingService(db).update_group(
+            group_key,
+            credits_per_unit=payload.credits_per_unit,
+            price_usd=payload.price_usd,
+            label=payload.label,
+            description=payload.description,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown credit group")
+
+
+@admin_routes.put("/credit-pricing/grants")
+def update_credit_grants(
+    payload: CreditGrantUpdateRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return CreditPricingService(db).update_grants(
+        free_credits=payload.free_credits,
+        referral_referrer_credits=payload.referral_referrer_credits,
+        referral_referee_credits=payload.referral_referee_credits,
+    )
 
 
 # Public / Portal Survey submission endpoints

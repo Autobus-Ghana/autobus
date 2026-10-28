@@ -168,6 +168,12 @@ class WorkflowActionService:
             )
 
         selected = [by_id[item] for item in wanted]
+        CreditService(self.db).require_credits(
+            user.id,
+            CreditType.SOCIAL_POST.value,
+            float(max(1, len(selected))),
+            "workflow_social_post",
+        )
         body = self._postiz_payload(payload, content, selected)
         if any(row["identifier"] == "tiktok" for row in selected):
             body = coerce_tiktok_privacy_for_unaudited_app(body)

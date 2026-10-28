@@ -18,6 +18,7 @@ _model_modules = [
 	"core.credits.model.user_credit_balance",
 	"core.credits.model.credit_usage_log",
 	"core.credits.model.credit_purchase",
+	"core.credits.model.credit_pricing",
 	"core.receipts.model.Receipt",
 	"core.payments.model.timeline",
 	"core.payments.model.paynetwork",

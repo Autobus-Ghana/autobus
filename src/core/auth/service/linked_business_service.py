@@ -157,7 +157,9 @@ class LinkedBusinessService:
         try:
             from core.credits.service.credit_service import CreditService
 
-            CreditService(self.db).grant_starter_credits(db_user.id)
+            credits = CreditService(self.db)
+            credits.grant_starter_credits(db_user.id)
+            credits.ensure_referral_code(db_user)
         except Exception as e:
             logger.warning("Starter credits not granted for linked business %s: %s", db_user.id, e)
 

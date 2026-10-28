@@ -46,6 +46,13 @@ class UserResponse(BaseModel):
     # Linked-business: set when this account is managed from another login
     managed_by_user_id: Optional[str] = None
 
+    referral_code: Optional[str] = None
+    referrals_invited: int = 0
+    referrals_joined: int = 0
+    referral_rewards: float = 0
+    referral_reward_credits: float = 0
+    referral_welcome_credits: float = 0
+
     # Status and Timestamps
     status: str
     enabled: bool

@@ -36,6 +36,8 @@ class UserCreateRequest(BaseModel):
     in_app_notification: Optional[bool] = None
     sms_notification: Optional[bool] = None
 
+    referral_code: Optional[str] = None
+
     @model_validator(mode="after")
     def resolve_username(self):
         name = (self.username or self.fullname or "").strip()

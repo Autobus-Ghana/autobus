@@ -11,6 +11,8 @@ from utilities.dbconfig import SessionLocal
 from sqlalchemy.orm import Session
 import logging
 from core.notification.model.Notification import Notification, NotificationStatus, NotificationType
+from core.credits.model.credit_types import CreditType
+from core.credits.service.credit_service import CreditService
 from core.user.model.User import User
 
 # DTO Models
@@ -189,6 +191,7 @@ def send_sms_notification(
 ):
     """Send an SMS notification to a phone number"""
     current_user_email = authjwt.get_jwt_subject()
+    CreditService(db).require_credits(current_user_email, CreditType.SMS.value, 1.0, "notification_sms")
     
     # If user_id not provided, use current user
     if not user_id:
@@ -225,6 +228,12 @@ def send_bulk_sms_notifications(
     """Send bulk SMS notifications to multiple users"""
     # Verify admin or appropriate permissions here
     current_user_email = authjwt.get_jwt_subject()
+    CreditService(db).require_credits(
+        current_user_email,
+        CreditType.SMS.value,
+        float(max(1, len(user_ids))),
+        "notification_bulk_sms",
+    )
     
     notification_service = NotificationService(db)
     

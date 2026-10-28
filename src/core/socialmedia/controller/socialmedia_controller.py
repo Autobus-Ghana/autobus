@@ -82,6 +82,8 @@ from core.socialmedia.service.zernio_service import (
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.cloudstorage.service.storageservice import StorageFolder, StorageService
 from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
+from core.credits.model.credit_types import CreditType
+from core.credits.service.credit_service import CreditService
 from core.user.model.User import User
 from utilities.crypto import encrypt_secret
 from utilities.dbconfig import get_db
@@ -797,6 +799,12 @@ async def publish_post(
     """
     try:
         internal_user_id = resolve_internal_user_id(db, jwt_subject)
+        CreditService(db).require_credits(
+            internal_user_id,
+            CreditType.SOCIAL_POST.value,
+            float(max(1, len(request.account_ids))),
+            "social_post",
+        )
         # Get user's access token for media uploads
         social_service = SocialMediaService(db, blotato_client)
         user_accounts = social_service.get_user_accounts(internal_user_id)
@@ -820,6 +828,8 @@ async def publish_post(
         
         return response
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[SOCIAL] Error publishing post: {str(e)}")
         raise HTTPException(
@@ -1349,6 +1359,7 @@ async def postiz_create_post(
                 payload,
             )
         except InstagramMediaPrepareError as exc:
+            logger.warning("[SOCIAL] media prepare rejected: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("[SOCIAL] Failed to prepare media for posting")
@@ -1357,8 +1368,17 @@ async def postiz_create_post(
                 detail="Could not prepare media. Check that the image or video URL is publicly reachable.",
             ) from exc
 
-    payload = coerce_tiktok_privacy_for_unaudited_app(payload)
     zernio_targets, other_posts = split_postiz_posts(db, internal_user_id, payload)
+    if other_posts:
+        coerce_tiktok_privacy_for_unaudited_app({**payload, "posts": other_posts})
+    if not zernio_targets and not other_posts:
+        raise HTTPException(status_code=400, detail="Choose at least one account to post to.")
+    CreditService(db).require_credits(
+        internal_user_id,
+        CreditType.SOCIAL_POST.value,
+        float(len(zernio_targets) + len(other_posts)),
+        "social_post",
+    )
     result: Dict[str, Any] = {}
     publish_ids: List[str] = []
 
@@ -1409,8 +1429,6 @@ async def postiz_create_post(
                 else status.HTTP_502_BAD_GATEWAY
             )
             raise HTTPException(status_code=status_code, detail=str(e)) from e
-    elif not zernio_targets:
-        raise HTTPException(status_code=400, detail="Choose at least one account to post to.")
 
     result["tiktok_publish_ids"] = publish_ids
 
@@ -1448,6 +1466,7 @@ async def create_digital_marketing_asset(
 ):
     """Archive a chat campaign (text transcript + media URLs) as a recent campaign."""
     user = _get_user_for_jwt_subject(db, jwt_subject)
+    CreditService(db).require_credits(str(user.id), CreditType.MEDIA_SAVE.value, 1.0, "media_save")
     canonical_agent = (
         normalize_digital_marketing_agent_name(body.agent_name)
         or "digital_marketing"
