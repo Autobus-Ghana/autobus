@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Sequence
 
 from fastapi import HTTPException, status
@@ -27,6 +27,43 @@ from core.user.model.User import User
 logger = logging.getLogger(__name__)
 
 CUSTOMER_CHANNEL_PAUSED = "Thanks for your message. This assistant is paused right now."
+
+_ACTIVITY_LABELS = {
+    "image_generation": "Generated an image",
+    "video_generation": "Generated a video",
+    "generation_reference": "Used a reference",
+    "media_save": "Saved media",
+    "video_concat": "Assembled a video",
+    "social_post": "Published a post",
+    "workflow_social_post": "Published a post",
+    "customer_sms": "Sent an SMS",
+    "customer_email": "Sent an email",
+    "notification_sms": "Sent an SMS",
+    "notification_bulk_sms": "Sent SMS messages",
+    "nlu_message": "AI chat",
+    "nlu_detect": "AI chat",
+    "owner_agent": "AI assistant",
+    "owner_agent_image": "Generated an image",
+    "owner_agent_video": "Generated a video",
+    "intelligence_chat": "AI assistant",
+    "agent_command": "AI assistant",
+    "embed_chat": "Customer chat",
+    "instagram_inbound": "Instagram reply",
+    "whatsapp_inbound": "WhatsApp reply",
+    "whatsapp_image": "WhatsApp reply",
+    "whatsapp_audio": "WhatsApp reply",
+    "simple_chat": "Customer chat",
+    "zernio_inbox": "Inbox reply",
+    "rag_upload": "Uploaded a file",
+    "multi_upload": "Uploaded files",
+    "storage_upload": "Uploaded a file",
+    "llm_chat": "AI chat",
+    "email_send": "Sent an email",
+    "sms_send": "Sent an SMS",
+    "workflow_intelligence": "Workflow AI",
+    "workflow_customer_service": "Workflow chat",
+    "workflow_marketing_content": "Marketing text",
+}
 
 _WALLET_PERIOD_START = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _WALLET_PERIOD_END = datetime(2099, 1, 1, tzinfo=timezone.utc)
@@ -580,6 +617,91 @@ class CreditService:
                 operation="referral_reward",
                 metadata={"referee_id": user.id},
             )
+
+    def consumption(self, user_id: str, days: int = 30) -> Dict[str, Any]:
+        """What this user spent, grouped by API activity, plus the latest charges."""
+        user_id = self._ensure_internal_user_id(user_id)
+        window = max(1, min(int(days), 365))
+        since = datetime.now(timezone.utc) - timedelta(days=window)
+        spent_filter = (
+            CreditUsageLog.user_id == user_id,
+            CreditUsageLog.created_at >= since,
+            CreditUsageLog.amount > 0,
+            CreditUsageLog.operation != "refund",
+        )
+        grouped = (
+            self.db.query(
+                CreditUsageLog.credit_type,
+                func.count(CreditUsageLog.id),
+                func.coalesce(func.sum(CreditUsageLog.amount), 0.0),
+            )
+            .filter(*spent_filter)
+            .group_by(CreditUsageLog.credit_type)
+            .all()
+        )
+        labels = self._group_labels()
+        total = sum(float(amount or 0) for _, _, amount in grouped)
+        groups = []
+        for credit_type, calls, amount in grouped:
+            spent = round(float(amount or 0), 4)
+            if spent <= 0:
+                continue
+            groups.append(
+                {
+                    "credit_type": credit_type,
+                    "label": labels.get(credit_type, credit_type),
+                    "calls": int(calls or 0),
+                    "credits_used": spent,
+                    "share": round(spent / total, 4) if total > 0 else 0.0,
+                }
+            )
+        groups.sort(key=lambda item: item["credits_used"], reverse=True)
+
+        recent_rows = (
+            self.db.query(CreditUsageLog)
+            .filter(*spent_filter)
+            .order_by(CreditUsageLog.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        recent = [
+            {
+                "id": row.id,
+                "credit_type": row.credit_type,
+                "label": labels.get(row.credit_type, row.credit_type),
+                "activity": _ACTIVITY_LABELS.get(row.operation)
+                or labels.get(row.credit_type, row.operation.replace("_", " ")),
+                "credits": round(float(row.amount or 0), 4),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in recent_rows
+        ]
+        return {
+            "days": window,
+            "credits_used": round(total, 4),
+            "groups": groups,
+            "recent": recent,
+        }
+
+    def _group_labels(self) -> Dict[str, str]:
+        labels = dict(CREDIT_TYPE_LABELS)
+        labels.update(
+            {
+                key: str(value[1])
+                for key, value in CREDIT_ACTIVITIES.items()
+                if len(value) > 1
+            }
+        )
+        try:
+            from core.credits.service.credit_pricing_service import CreditPricingService
+
+            for group in CreditPricingService(self.db).list_groups():
+                name = (group.get("label") or "").strip()
+                if name:
+                    labels[group["group_key"]] = name
+        except Exception:
+            logger.debug("Credit group labels fell back to defaults", exc_info=True)
+        return labels
 
     def referral_profile(self, user: User) -> Dict[str, Any]:
         code = self.ensure_referral_code(user)

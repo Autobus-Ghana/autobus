@@ -43,6 +43,30 @@ class UserCreditsResponse(BaseModel):
     credits: Dict[str, CreditBalanceItem]
 
 
+class CreditConsumptionGroup(BaseModel):
+    credit_type: str
+    label: str
+    calls: int
+    credits_used: float
+    share: float = 0
+
+
+class CreditConsumptionEvent(BaseModel):
+    id: int
+    credit_type: str
+    label: str
+    activity: str
+    credits: float
+    created_at: Optional[str] = None
+
+
+class CreditConsumptionResponse(BaseModel):
+    days: int
+    credits_used: float
+    groups: List[CreditConsumptionGroup] = []
+    recent: List[CreditConsumptionEvent] = []
+
+
 class CreditCheckoutRequest(BaseModel):
     pack_id: str
     email: Optional[str] = None

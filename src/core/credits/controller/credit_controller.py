@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from another_fastapi_jwt_auth import AuthJWT
 from sqlalchemy.orm import Session
 
@@ -7,6 +7,7 @@ from core.credits.usd_ghs import usd_to_ghs
 from core.credits.dto.credit_response import (
     CreditBalanceItem,
     CreditCheckoutRequest,
+    CreditConsumptionResponse,
     CreditPackItem,
     UserCreditsResponse,
     WalletBalance,
@@ -42,6 +43,18 @@ def get_my_credits(
         packs=[CreditPackItem(**p) for p in data.get("packs") or []],
         credits=credits,
     )
+
+
+@credit_routes.get("/usage", response_model=CreditConsumptionResponse)
+def get_my_credit_usage(
+    days: int = Query(30, ge=1, le=365),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """What has been spending this user's credits, grouped by activity."""
+    user = UserService(db).get_current_user(authjwt.get_jwt_subject())
+    data = CreditService(db).consumption(user.id, days)
+    return CreditConsumptionResponse(**data)
 
 
 @credit_routes.get("/packs")
