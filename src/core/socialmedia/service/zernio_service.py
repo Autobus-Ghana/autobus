@@ -24,6 +24,7 @@ from core.socialmedia.model.ZernioWebhookEvent import ZernioWebhookEvent
 from core.socialmedia.service.zernio_client import ZernioAPIError, ZernioClient
 from core.socialmedia.service.zernio_mapping import (
     INBOX_WEBHOOK_EVENTS,
+    ZERNIO_MESSAGING_ONLY_PLATFORMS,
     ZERNIO_PLATFORMS,
     account_connected_parts,
     build_create_post_body,
@@ -188,7 +189,7 @@ def connect_authorization(
         raise ZernioAPIError(f"{platform} is not connected through Zernio", status_code=400)
     if not zernio_enabled():
         raise ZernioAPIError(
-            "ZERNIO_API_KEY is not configured. Instagram, Facebook, and TikTok connect through Zernio.",
+            "ZERNIO_API_KEY is not configured. Instagram, Facebook, TikTok, and WhatsApp connect through Zernio.",
             status_code=400,
         )
 
@@ -379,7 +380,7 @@ def posting_integrations(db: Session, user_id: str) -> List[Dict[str, Any]]:
         db.rollback()
     rows = []
     for account in list_accounts(db, user_id):
-        if account.platform == "instagram":
+        if account.platform == "instagram" or account.platform in ZERNIO_MESSAGING_ONLY_PLATFORMS:
             continue
         rows.append(integration_row(account))
     return rows

@@ -34,6 +34,13 @@ class CustomerIdentityTests(unittest.TestCase):
         self.assertEqual(key, "233241234567")
         self.assertFalse(is_instagram_conversation("user123:233241234567"))
 
+    def test_parse_zernio_whatsapp_key(self):
+        merchant, channel, key = parse_conversation_user_id("user123:wa:233241234567")
+        self.assertEqual(merchant, "user123")
+        self.assertEqual(channel, "wa")
+        self.assertEqual(key, "233241234567")
+        self.assertTrue(looks_like_phone(key))
+
     def test_looks_like_phone_rejects_instagram_ids(self):
         self.assertTrue(looks_like_phone("233241234567"))
         self.assertTrue(looks_like_phone("0550748724"))

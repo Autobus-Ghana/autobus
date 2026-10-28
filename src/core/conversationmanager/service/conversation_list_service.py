@@ -275,10 +275,10 @@ class ConversationListService:
 
         if not username and not resolved_phone and not display_name:
             channel = social_channel(row.user_id)
-            if channel:
-                display_name = SOCIAL_CHANNEL_LABELS.get(channel, "Message")
-            elif looks_like_phone(channel_key):
+            if channel in (None, "wa") and looks_like_phone(channel_key):
                 resolved_phone = channel_key
+            elif channel:
+                display_name = SOCIAL_CHANNEL_LABELS.get(channel, "Message")
 
         return username, resolved_phone, display_name
 

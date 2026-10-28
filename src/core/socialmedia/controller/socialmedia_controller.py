@@ -462,7 +462,8 @@ async def initiate_oauth_flow(
             zernio_slug = "twitter" if zernio_slug == "x" else "instagram"
         if zernio_slug == "google-business":
             zernio_slug = "googlebusiness"
-        if zernio_slug in ZERNIO_PLATFORMS:
+        is_whatsapp_status = platform.strip().lower().replace("_", "-") == "whatsapp-status"
+        if zernio_slug in ZERNIO_PLATFORMS and not is_whatsapp_status:
             user = db.query(User).filter(User.id == internal_user_id).first()
             if not user:
                 raise HTTPException(status_code=404, detail="User not found")
@@ -845,7 +846,7 @@ async def zernio_list_accounts(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
-    """Connected Instagram, Facebook, and TikTok accounts for this customer."""
+    """Connected Zernio accounts for this customer. WhatsApp is listed from /whatsapp/accounts."""
     internal_user_id = resolve_internal_user_id(db, jwt_subject)
     return [
         {
@@ -857,6 +858,7 @@ async def zernio_list_accounts(
             "is_active": row.is_active,
         }
         for row in list_zernio_accounts(db, internal_user_id)
+        if row.platform != "whatsapp"
     ]
 
 

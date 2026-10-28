@@ -14,6 +14,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
+from core.socialmedia.service.zernio_client import ZernioAPIError
+from core.socialmedia.service.zernio_service import (
+    connect_authorization,
+    disconnect_account as disconnect_zernio_account,
+    list_accounts as list_zernio_accounts,
+    sync_accounts_from_zernio as sync_zernio_accounts,
+)
+from core.user.model.User import User
 from core.whatsapp.model.WhatsAppAccount import WhatsAppAccount
 from core.whatsapp.service.meta_embedded_signup_service import (
     MetaWhatsAppOAuthState,
@@ -443,32 +451,32 @@ async def whatsapp_connect(
     ),
     raw_meta: bool = Query(
         False,
-        description="If true, return Meta onboard URL directly (debug only).",
+        description="Ignored (kept so older app builds that pass it still work).",
     ),
 ):
-    """Return Autobus Embedded Signup bridge URL (Facebook JS SDK launch)."""
+    """Return a Zernio connect URL for WhatsApp inbox messaging."""
+    _ = (launch, raw_meta)
     try:
         user_id = resolve_internal_user_id(db, jwt_subject)
-        svc = MetaWhatsAppService()
-        svc.require_config()
-        state = MetaWhatsAppOAuthState.create(user_id, return_to=return_to)
-        launch_mode = (launch or "sdk").strip().lower()
-        if raw_meta:
-            url = svc.build_onboard_url(state)
-        else:
-            # Start on the JavaScript SDK domain (useautobus.com). Do not 302
-            # into Facebook's OAuth dialog: that redirect_uri is not in
-            # Valid OAuth Redirect URIs.
-            url = svc.build_launch_bridge_url(state)
-        if launch_mode in {"redirect", "oauth", "ios"}:
-            logger.info("[WA] connect launch=%s using callback launch page", launch_mode)
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        payload = connect_authorization(db, user, "whatsapp", return_to=return_to)
         return WhatsAppConnectResponse(
-            authorization_url=url,
-            state=state,
-            redirect_uri=svc.redirect_uri,
+            authorization_url=payload["authorization_url"],
+            provider="ZERNIO",
+            state=payload.get("state") or "",
+            redirect_uri=payload.get("redirect_uri") or "",
+            message=payload.get("message")
+            or "Open authorization_url to link WhatsApp. Inbox messaging goes through Zernio.",
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ZernioAPIError as exc:
+        raise HTTPException(
+            status_code=exc.status_code if exc.status_code < 500 else 502,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("[WA] connect failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -534,7 +542,28 @@ async def list_whatsapp_accounts(
         .filter(WhatsAppAccount.user_id == user_id, WhatsAppAccount.is_active.is_(True))
         .all()
     )
-    return [WhatsAppAccountResponse.model_validate(r) for r in rows]
+    listed = [WhatsAppAccountResponse.model_validate(r) for r in rows]
+    try:
+        sync_zernio_accounts(db, user_id)
+    except Exception as exc:
+        logger.warning("[WA] Zernio account sync failed: %s", exc)
+        db.rollback()
+    for account in list_zernio_accounts(db, user_id, "whatsapp"):
+        phone = (account.username or account.platform_user_id or "").strip()
+        name = (account.display_name or "").strip()
+        listed.append(
+            WhatsAppAccountResponse(
+                id=account.id,
+                waba_id=account.zernio_account_id,
+                phone_number_id=account.platform_user_id or account.zernio_account_id,
+                display_phone_number=phone or None,
+                verified_name=name if name and name != phone else None,
+                is_active=account.is_active,
+                webhook_subscribed=account.messaging_enabled,
+                phone_registered=True,
+            )
+        )
+    return listed
 
 
 @whatsapp_routes.delete("/accounts/{account_id}")
@@ -544,6 +573,8 @@ async def disconnect_whatsapp_account(
     db: Session = Depends(get_db),
 ):
     user_id = resolve_internal_user_id(db, jwt_subject)
+    if disconnect_zernio_account(db, user_id, account_id):
+        return {"status": "ok", "message": "WhatsApp account disconnected", "provider": "zernio"}
     row = (
         db.query(WhatsAppAccount)
         .filter(WhatsAppAccount.id == account_id, WhatsAppAccount.user_id == user_id)

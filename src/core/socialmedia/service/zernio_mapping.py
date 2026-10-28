@@ -7,7 +7,7 @@ import hmac
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
-# Platforms Zernio can publish to. API values match GET /v1/connect/{platform}.
+# Platforms connected through Zernio. API values match GET /v1/connect/{platform}.
 ZERNIO_PLATFORMS = (
     "twitter",
     "instagram",
@@ -24,7 +24,11 @@ ZERNIO_PLATFORMS = (
     "telegram",
     "discord",
     "slack",
+    "whatsapp",
 )
+
+# Messaging-only platforms. They never appear as posting targets.
+ZERNIO_MESSAGING_ONLY_PLATFORMS = frozenset({"whatsapp"})
 
 # Direct-message inboxes. Comment-only platforms stay on the posting list.
 ZERNIO_INBOX_PLATFORMS = (
@@ -36,6 +40,7 @@ ZERNIO_INBOX_PLATFORMS = (
     "bluesky",
     "telegram",
     "slack",
+    "whatsapp",
 )
 
 # Autobus conversation channel segment for each inbox platform.
@@ -48,6 +53,7 @@ CHANNEL_BY_PLATFORM = {
     "bluesky": "bs",
     "telegram": "tg",
     "slack": "sl",
+    "whatsapp": "wa",
 }
 PLATFORM_BY_CHANNEL = {value: key for key, value in CHANNEL_BY_PLATFORM.items()}
 

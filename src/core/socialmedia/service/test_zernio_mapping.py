@@ -15,6 +15,7 @@ from core.socialmedia.service.zernio_mapping import (
     should_retry_zernio,
     verify_webhook_signature,
     zernio_id,
+    ZERNIO_PLATFORMS,
 )
 
 
@@ -161,6 +162,27 @@ class ZernioMappingTests(unittest.TestCase):
         self.assertEqual(parts["sender_id"], "igsid")
         self.assertEqual(parts["image_url"], "https://cdn.example.com/a.jpg")
         self.assertTrue(parts["incoming"])
+
+    def test_whatsapp_inbox_event_maps_to_wa_channel(self):
+        parts = inbox_message_parts(
+            {
+                "event": "message.received",
+                "profiles": [{"id": "profile", "externalId": "user_1"}],
+                "message": {
+                    "conversationId": "conv_wa",
+                    "platform": "whatsapp",
+                    "direction": "incoming",
+                    "text": {"body": "Hi, do you deliver?"},
+                    "sender": {"id": "233241234567", "name": "Kofi"},
+                },
+                "account": {"accountId": "acct_wa", "platform": "whatsapp"},
+            }
+        )
+        self.assertEqual(parts["channel"], "wa")
+        self.assertEqual(parts["sender_id"], "233241234567")
+        self.assertEqual(parts["text"], "Hi, do you deliver?")
+        self.assertIn("whatsapp", ZERNIO_PLATFORMS)
+        self.assertEqual(connect_scopes("whatsapp"), "")
 
     def test_publish_status(self):
         status = publish_status_for_ui(

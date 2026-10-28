@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-SOCIAL_CHANNELS = ("ig", "fb", "tt", "tw", "rd", "bs", "tg", "sl")
+SOCIAL_CHANNELS = ("ig", "fb", "tt", "tw", "rd", "bs", "tg", "sl", "wa")
 
 SOCIAL_CHANNEL_LABELS = {
     "ig": "Instagram",
@@ -19,6 +19,7 @@ SOCIAL_CHANNEL_LABELS = {
     "bs": "Bluesky",
     "tg": "Telegram",
     "sl": "Slack",
+    "wa": "WhatsApp",
 }
 
 
