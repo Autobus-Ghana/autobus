@@ -272,14 +272,6 @@ async def lifespan(app: FastAPI):
                 if seeded:
                     db.commit()
                     logger.info("[APP_STARTUP] Seeded platform_role for %s env admin(s)", seeded)
-            try:
-                from core.admin.service.owner_resource_service import seed_owner_resources
-
-                added = seed_owner_resources(db)
-                if added:
-                    logger.info("[APP_STARTUP] Seeded %s owner resources", added)
-            except Exception as seed_err:
-                logger.warning("[APP_STARTUP] Owner resource seed skipped: %s", seed_err)
         finally:
             db.close()
     except Exception as e:

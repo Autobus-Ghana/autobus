@@ -212,8 +212,8 @@ def _item(**kwargs) -> dict:
     return kwargs
 
 
-# Real public videos and articles. Missing seed ids are inserted on API startup
-# and are not overwritten if an admin later edits them.
+# Catalogue of public videos and articles. Not inserted on startup, so an admin
+# delete stays deleted. seed_owner_resources() can still apply this list by hand.
 SEED_RESOURCES: Iterable[dict] = [
     _video(
         "res_seed_v_sinek",
