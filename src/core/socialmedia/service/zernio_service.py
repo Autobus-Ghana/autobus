@@ -27,6 +27,8 @@ from core.socialmedia.service.zernio_mapping import (
     ZERNIO_PLATFORMS,
     account_connected_parts,
     build_create_post_body,
+    connect_scopes,
+    remote_account_active,
     zernio_id,
     creator_info_for_ui,
     direct_instagram_post_body,
@@ -193,7 +195,12 @@ def connect_authorization(
     profile = ensure_profile(db, user)
     state = _sign_state(user.id, slug, return_to)
     redirect = f"{_public_api_base()}/api/v1/social/zernio/callback?state={quote(state, safe='')}"
-    auth_url = _client().connect_url(slug, profile_id=profile.zernio_profile_id, redirect_url=redirect)
+    auth_url = _client().connect_url(
+        slug,
+        profile_id=profile.zernio_profile_id,
+        redirect_url=redirect,
+        scopes=connect_scopes(slug),
+    )
     label = slug.replace("-", " ").title()
     return {
         "authorization_url": auth_url,
@@ -276,17 +283,20 @@ def sync_accounts_from_zernio(db: Session, user_id: str) -> List[ZernioAccount]:
         if not account_id or platform not in ZERNIO_PLATFORMS:
             continue
         seen.add(account_id)
-        _upsert_account(
-            db,
-            user_id=user_id,
-            profile_id=zernio_id(item.get("profileId")) or profile.zernio_profile_id,
-            account_id=account_id,
-            platform=platform,
-            username=str(item.get("username") or "").strip(),
-            display_name=str(item.get("displayName") or item.get("name") or item.get("username") or "").strip(),
-            platform_user_id=str(item.get("platformUserId") or "").strip(),
-            active=bool(item.get("isActive", True)),
-        )
+        try:
+            _upsert_account(
+                db,
+                user_id=user_id,
+                profile_id=zernio_id(item.get("profileId")) or profile.zernio_profile_id,
+                account_id=account_id,
+                platform=platform,
+                username=str(item.get("username") or "").strip(),
+                display_name=str(item.get("displayName") or item.get("name") or item.get("username") or "").strip(),
+                platform_user_id=str(item.get("platformUserId") or "").strip(),
+                active=remote_account_active(item),
+            )
+        except ZernioAPIError as exc:
+            logger.warning("[ZERNIO] skipped account %s: %s", account_id, exc)
     return (
         db.query(ZernioAccount)
         .filter(ZernioAccount.user_id == user_id, ZernioAccount.is_active.is_(True))
@@ -359,7 +369,14 @@ def posting_integrations(db: Session, user_id: str) -> List[Dict[str, Any]]:
     """Connected Zernio accounts for the marketing account list.
 
     Instagram is listed from /instagram/accounts so it is not shown twice.
+    Refresh from Zernio first so a channel that connected without a callback
+    (YouTube often does) still appears when the composer loads.
     """
+    try:
+        sync_accounts_from_zernio(db, user_id)
+    except Exception as exc:
+        logger.warning("[ZERNIO] account sync before listing failed: %s", exc)
+        db.rollback()
     rows = []
     for account in list_accounts(db, user_id):
         if account.platform == "instagram":
@@ -572,8 +589,19 @@ def claim_webhook_event(db: Session, event_id: str, event_name: str) -> bool:
 
 def apply_account_event(db: Session, payload: Dict[str, Any], *, connected: bool) -> None:
     parts = account_connected_parts(payload)
-    if not parts["account_id"] or not parts["external_id"]:
-        logger.info("[ZERNIO] account event missing ids")
+    if not parts["account_id"]:
+        logger.info("[ZERNIO] account event missing account id")
+        return
+    if not parts["external_id"] and parts["profile_id"]:
+        profile = (
+            db.query(ZernioProfile)
+            .filter(ZernioProfile.zernio_profile_id == parts["profile_id"])
+            .first()
+        )
+        if profile:
+            parts["external_id"] = profile.user_id
+    if not parts["external_id"]:
+        logger.info("[ZERNIO] account event missing customer id")
         return
     if not connected:
         row = (

@@ -141,15 +141,24 @@ class ZernioClient:
                 return profiles[0]
         return None
 
-    def connect_url(self, platform: str, *, profile_id: str, redirect_url: str) -> str:
+    def connect_url(
+        self,
+        platform: str,
+        *,
+        profile_id: str,
+        redirect_url: str,
+        scopes: str = "",
+    ) -> str:
+        params: Dict[str, Any] = {
+            "profileId": profile_id,
+            "redirect_url": redirect_url,
+        }
+        if scopes:
+            params["scopes"] = scopes
         body = self.request(
             "GET",
             f"/connect/{platform}",
-            params={
-                "profileId": profile_id,
-                "redirect_url": redirect_url,
-                "scopes": "posting,messaging,comments,analytics",
-            },
+            params=params,
         )
         url = str(body.get("authUrl") or body.get("authorization_url") or "").strip()
         if not url:
@@ -158,8 +167,11 @@ class ZernioClient:
 
     def list_accounts(self, profile_id: str) -> list:
         body = self.request("GET", "/accounts", params={"profileId": profile_id})
-        accounts = body.get("accounts") or body.get("data") or []
-        return accounts if isinstance(accounts, list) else []
+        for key in ("accounts", "data", "items", "value"):
+            accounts = body.get(key)
+            if isinstance(accounts, list):
+                return accounts
+        return []
 
     def delete_account(self, account_id: str) -> Dict[str, Any]:
         return self.request("DELETE", f"/accounts/{account_id}")

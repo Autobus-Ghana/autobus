@@ -5,10 +5,13 @@ from __future__ import annotations
 import unittest
 
 from core.socialmedia.service.zernio_mapping import (
+    account_connected_parts,
     build_create_post_body,
+    connect_scopes,
     creator_info_for_ui,
     inbox_message_parts,
     publish_status_for_ui,
+    remote_account_active,
     should_retry_zernio,
     verify_webhook_signature,
     zernio_id,
@@ -165,6 +168,37 @@ class ZernioMappingTests(unittest.TestCase):
         )
         self.assertTrue(status["complete"])
         self.assertFalse(status["failed"])
+
+    def test_youtube_connect_scopes_omit_messaging(self):
+        scopes = connect_scopes("youtube").split(",")
+        self.assertIn("posting", scopes)
+        self.assertNotIn("messaging", scopes)
+        self.assertEqual(connect_scopes("bluesky"), "")
+
+    def test_youtube_account_event_reads_nested_profile(self):
+        parts = account_connected_parts(
+            {
+                "account": {
+                    "_id": "acct_yt",
+                    "platform": "youtube",
+                    "username": "shoptv",
+                    "displayName": "Shop TV",
+                    "profileId": {
+                        "_id": "profile_1",
+                        "externalId": "user_1",
+                    },
+                }
+            }
+        )
+        self.assertEqual(parts["account_id"], "acct_yt")
+        self.assertEqual(parts["platform"], "youtube")
+        self.assertEqual(parts["profile_id"], "profile_1")
+        self.assertEqual(parts["external_id"], "user_1")
+        self.assertEqual(parts["display_name"], "Shop TV")
+
+    def test_disabled_side_effect_account_is_not_postable(self):
+        self.assertTrue(remote_account_active({"isActive": True, "platform": "youtube"}))
+        self.assertFalse(remote_account_active({"isActive": True, "enabled": False}))
 
     def test_webhook_signature(self):
         body = b'{"event":"message.received"}'

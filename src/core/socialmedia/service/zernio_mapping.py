@@ -53,6 +53,39 @@ PLATFORM_BY_CHANNEL = {value: key for key, value in CHANNEL_BY_PLATFORM.items()}
 
 CONNECT_SCOPES = "posting,messaging,comments,analytics"
 
+# YouTube, Threads, LinkedIn, Pinterest, and Google Business have no messaging
+# grant. Asking for it makes Zernio reject the connect URL, so the channel never
+# lands in the posting list.
+_CONNECT_SCOPE_AREAS = {
+    "youtube": ("posting", "comments", "analytics"),
+    "threads": ("posting", "comments", "analytics"),
+    "linkedin": ("posting", "comments", "analytics"),
+    "pinterest": ("posting", "analytics"),
+    "googlebusiness": ("posting", "comments", "analytics"),
+}
+# These dialogs cannot be reduced. Sending scopes returns 400.
+_SCOPES_UNSUPPORTED = frozenset({"bluesky", "telegram", "discord", "snapchat", "whatsapp"})
+
+
+def connect_scopes(platform: str) -> str:
+    slug = (platform or "").strip().lower()
+    if slug in _SCOPES_UNSUPPORTED:
+        return ""
+    areas = _CONNECT_SCOPE_AREAS.get(slug)
+    if areas:
+        return ",".join(areas)
+    return CONNECT_SCOPES
+
+
+def remote_account_active(item: Dict[str, Any]) -> bool:
+    """Zernio hides posting targets when enabled is false, even if isActive is true."""
+    if item.get("isActive") is False:
+        return False
+    if item.get("enabled") is False:
+        return False
+    return True
+
+
 INBOX_WEBHOOK_EVENTS = (
     "message.received",
     "account.connected",
@@ -434,15 +467,26 @@ def inbox_message_parts(payload: Dict[str, Any]) -> Dict[str, Any]:
 def account_connected_parts(payload: Dict[str, Any]) -> Dict[str, str]:
     account = _as_dict(payload.get("account"))
     profiles = payload.get("profiles") if isinstance(payload.get("profiles"), list) else []
+    profile_obj = account.get("profileId") if isinstance(account.get("profileId"), dict) else {}
+    if not profile_obj and isinstance(account.get("profile"), dict):
+        profile_obj = account.get("profile")
     external_id = ""
-    profile_id = _first_str(account.get("profileId"), account.get("profile_id"))
+    profile_id = zernio_id(account.get("profileId")) or _first_str(account.get("profile_id"))
     if profiles and isinstance(profiles[0], dict):
         external_id = _first_str(profiles[0].get("externalId"), profiles[0].get("external_id"))
-        profile_id = _first_str(profiles[0].get("id"), profile_id)
+        profile_id = zernio_id(profiles[0]) or profile_id
+    if not external_id:
+        external_id = _first_str(profile_obj.get("externalId"), profile_obj.get("external_id"))
+    if not profile_id:
+        profile_id = zernio_id(profile_obj)
     return {
         "external_id": external_id,
         "profile_id": profile_id,
-        "account_id": _first_str(account.get("accountId"), account.get("id"), account.get("_id")),
+        "account_id": (
+            zernio_id(account.get("accountId"))
+            or zernio_id(account.get("id"))
+            or zernio_id(account.get("_id"))
+        ),
         "platform": _first_str(account.get("platform")).lower(),
         "username": _first_str(account.get("username"), account.get("name")),
         "display_name": _first_str(account.get("displayName"), account.get("name"), account.get("username")),
