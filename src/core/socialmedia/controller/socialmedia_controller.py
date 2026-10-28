@@ -4,6 +4,8 @@ API routes for social media account management and posting
 """
 
 import asyncio
+import html
+import json
 import logging
 import os
 import re
@@ -60,6 +62,22 @@ from core.socialmedia.service.instagram_media_prepare import (
     InstagramMediaPrepareService,
     parse_http_byte_range,
     payload_has_attached_media,
+)
+from core.socialmedia.service.zernio_client import ZernioAPIError
+from core.socialmedia.service.zernio_mapping import ZERNIO_PLATFORMS
+from core.socialmedia.service.zernio_service import (
+    connect_authorization,
+    disconnect_account as disconnect_zernio_account,
+    find_account as find_zernio_account,
+    list_accounts as list_zernio_accounts,
+    posting_integrations,
+    publish_targets,
+    read_state,
+    record_callback_account,
+    split_postiz_posts,
+    tiktok_creator_info as zernio_tiktok_creator_info,
+    tiktok_publish_status as zernio_tiktok_publish_status,
+    zernio_enabled,
 )
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.cloudstorage.service.storageservice import StorageFolder, StorageService
@@ -194,6 +212,18 @@ _CONNECT_PATH_TO_PLATFORM: Dict[str, str] = {
     "whatsapp-status": "WHATSAPP",
     "tiktok": "TIKTOK",
     "youtube": "YOUTUBE",
+    "twitter": "TWITTER",
+    "x": "TWITTER",
+    "linkedin": "LINKEDIN",
+    "pinterest": "PINTEREST",
+    "reddit": "REDDIT",
+    "bluesky": "BLUESKY",
+    "threads": "THREADS",
+    "googlebusiness": "GOOGLE_BUSINESS",
+    "snapchat": "SNAPCHAT",
+    "telegram": "TELEGRAM",
+    "discord": "DISCORD",
+    "slack": "SLACK",
 }
 
 # If the primary Postiz social slug fails, try these (Instagram Graph vs Business Login).
@@ -425,11 +455,24 @@ async def initiate_oauth_flow(
                 detail=f"Unsupported platform. Supported: {', '.join(valid_platforms)}",
             )
 
-        if platform_upper == "INSTAGRAM" or (postiz_slug or "").startswith("instagram"):
-            return _instagram_business_login_connect(
-                internal_user_id,
-                return_to=return_to,
-            )
+        zernio_slug = (postiz_slug or platform.strip().lower()).replace("_", "")
+        if zernio_slug in {"x", "instagram-standalone"}:
+            zernio_slug = "twitter" if zernio_slug == "x" else "instagram"
+        if zernio_slug == "google-business":
+            zernio_slug = "googlebusiness"
+        if zernio_slug in ZERNIO_PLATFORMS:
+            user = db.query(User).filter(User.id == internal_user_id).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            try:
+                return connect_authorization(
+                    db,
+                    user,
+                    zernio_slug,
+                    return_to=return_to,
+                )
+            except ZernioAPIError as exc:
+                raise HTTPException(status_code=exc.status_code if exc.status_code < 500 else 502, detail=str(exc)) from exc
 
         postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
         if postiz_slug and postiz_base_url:
@@ -787,6 +830,100 @@ async def publish_post(
 
 # ==================== Postiz Public API Proxy Routes ====================
 
+@social_routes.get("/zernio/accounts")
+async def zernio_list_accounts(
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Connected Instagram, Facebook, and TikTok accounts for this customer."""
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    return [
+        {
+            "id": row.id,
+            "platform": row.platform,
+            "username": row.username,
+            "name": row.display_name or row.username,
+            "zernio_account_id": row.zernio_account_id,
+            "is_active": row.is_active,
+        }
+        for row in list_zernio_accounts(db, internal_user_id)
+    ]
+
+
+@social_routes.get("/zernio/callback")
+async def zernio_oauth_callback(
+    db: Session = Depends(get_db),
+    state: Optional[str] = Query(None),
+    accountId: Optional[str] = Query(None),
+    username: Optional[str] = Query(None),
+    profileId: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    error_message: Optional[str] = Query(None),
+):
+    """Browser return from Zernio OAuth. The account.connected webhook is the other path."""
+    from fastapi.responses import HTMLResponse
+
+    from core.instagram.controller.instagram_controller import _error_html, _result_html
+
+    parsed = read_state(state or "")
+    return_to = (parsed or {}).get("return_to") or "web"
+    if error:
+        return HTMLResponse(
+            _error_html(error_message or error, return_to=return_to),
+            status_code=400,
+        )
+    if not parsed:
+        return HTMLResponse(
+            _error_html("This connect link expired. Start again from Autobus.", return_to=return_to),
+            status_code=400,
+        )
+    remote_id = (accountId or "").strip()
+    if not remote_id:
+        return HTMLResponse(
+            _error_html(
+                "Zernio did not return an account. Finish the connect screen and try again.",
+                return_to=return_to,
+            ),
+            status_code=400,
+        )
+    try:
+        account = record_callback_account(
+            db,
+            user_id=parsed["user_id"],
+            platform=parsed["platform"],
+            account_id=remote_id,
+            username=(username or "").strip(),
+            profile_id=(profileId or "").strip(),
+        )
+    except ZernioAPIError as exc:
+        return HTMLResponse(_error_html(str(exc), return_to=return_to), status_code=400)
+
+    label = html.escape(account.username or account.display_name or account.platform)
+    platform_js = json.dumps(account.platform)
+    account_js = json.dumps(account.id)
+    return HTMLResponse(
+        _result_html(
+            title=f"{account.platform.title()} linked",
+            heading=f"{account.platform.title()} linked",
+            body_html=(
+                f"<p>Connected <strong>{label}</strong>. "
+                "Inbox messages and posts for this account go through Zernio.</p>"
+            ),
+            return_to=return_to,
+            error=False,
+            extra_script=(
+                "try{var msg={type:'AUTOBUS_ZERNIO_LINKED',platform:"
+                f"{platform_js},account_id:{account_js}"
+                "};if(window.opener){window.opener.postMessage(msg,'*');}"
+                "if(" + platform_js + "==='instagram'&&window.opener){"
+                "window.opener.postMessage({type:'AUTOBUS_INSTAGRAM_LINKED',ig_user_id:"
+                f"{account_js}"
+                "},'*');}}catch(e){}"
+            ),
+        )
+    )
+
+
 @social_routes.get("/postiz/integrations")
 async def postiz_list_integrations(
     jwt_subject: str = Depends(validate_token),
@@ -796,30 +933,32 @@ async def postiz_list_integrations(
     List Postiz integrations (connected channels) for the current user-business.
     Uses a user-scoped Postiz API key if available, or a global fallback key from env.
     """
-    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-    if not postiz_base_url:
-        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
-
     internal_user_id = resolve_internal_user_id(db, jwt_subject)
-    api_key = _resolve_postiz_api_key(internal_user_id, db)
-    if not api_key:
-        raise HTTPException(
-            status_code=404,
-            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
-        )
+    zernio_rows = posting_integrations(db, internal_user_id)
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    api_key = _resolve_postiz_api_key(internal_user_id, db) if postiz_base_url else None
+    if not postiz_base_url or not api_key:
+        return zernio_rows
 
     try:
         client = PostizClient(postiz_base_url)
         raw = await client.list_integrations(api_key)
-        return normalize_postiz_integrations_list(raw)
+        postiz_rows = normalize_postiz_integrations_list(raw)
     except PostizAPIError as e:
         if e.status_code == 504:
             logger.warning(
                 "[SOCIAL] Postiz list integrations timed out for user %s",
                 internal_user_id,
             )
-            return []
+            return zernio_rows
+        if zernio_rows:
+            logger.warning("[SOCIAL] Postiz list failed, returning Zernio accounts: %s", e)
+            return zernio_rows
         raise HTTPException(status_code=502, detail=str(e))
+
+    zernio_ids = {row["id"] for row in zernio_rows}
+    merged = [row for row in postiz_rows if str(row.get("id") or "") not in zernio_ids]
+    return merged + zernio_rows
 
 
 def _postiz_login_credentials(user: User) -> Tuple[str, str]:
@@ -835,11 +974,21 @@ async def postiz_tiktok_creator_info(
     db: Session = Depends(get_db),
 ):
     """Latest TikTok creator_info for the Post to TikTok screen."""
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    zernio_account = find_zernio_account(db, internal_user_id, integration_id)
+    if zernio_account and zernio_account.platform == "tiktok":
+        if not zernio_enabled():
+            raise HTTPException(status_code=400, detail="ZERNIO_API_KEY is not configured")
+        try:
+            return zernio_tiktok_creator_info(zernio_account)
+        except ZernioAPIError as exc:
+            status_code = exc.status_code if exc.status_code in {400, 401, 404} else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
     postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
     if not postiz_base_url:
         raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
 
-    internal_user_id = resolve_internal_user_id(db, jwt_subject)
     api_key = _resolve_postiz_api_key(internal_user_id, db)
     if not api_key:
         raise HTTPException(
@@ -870,12 +1019,22 @@ async def postiz_tiktok_publish_status(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
-    """Poll TikTok / Postiz for Direct Post processing status."""
+    """Poll TikTok for Direct Post processing status."""
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    zernio_account = find_zernio_account(db, internal_user_id, integration_id)
+    if zernio_account and zernio_account.platform == "tiktok":
+        if not zernio_enabled():
+            raise HTTPException(status_code=400, detail="ZERNIO_API_KEY is not configured")
+        try:
+            return zernio_tiktok_publish_status(zernio_account, (publish_id or "").strip())
+        except ZernioAPIError as exc:
+            status_code = exc.status_code if exc.status_code in {400, 401, 404} else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
     postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
     if not postiz_base_url:
         raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
 
-    internal_user_id = resolve_internal_user_id(db, jwt_subject)
     api_key = _resolve_postiz_api_key(internal_user_id, db)
     if not api_key:
         raise HTTPException(
@@ -969,13 +1128,9 @@ async def postiz_delete_integration(
     db: Session = Depends(get_db),
 ):
     """
-    Unlink a Postiz channel for the current user-business.
-    Proxies Postiz `DELETE /api/public/v1/integrations/{id}`.
+    Unlink a connected channel for the current customer.
+    Zernio accounts (Facebook, TikTok) are disconnected there. Other channels stay on Postiz.
     """
-    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-    if not postiz_base_url:
-        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
-
     iid = (integration_id or "").strip()
     if not iid:
         raise HTTPException(status_code=400, detail="integration_id is required")
@@ -986,6 +1141,14 @@ async def postiz_delete_integration(
         )
 
     internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    if disconnect_zernio_account(db, internal_user_id, iid):
+        logger.info("[SOCIAL] Zernio account unlinked: %s by user %s", iid, internal_user_id)
+        return {"status": "ok", "message": "Account unlinked", "provider": "zernio"}
+
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=404, detail="Account not found")
+
     api_key = _resolve_postiz_api_key(internal_user_id, db)
     if not api_key:
         raise HTTPException(
@@ -1176,16 +1339,7 @@ async def postiz_create_post(
     links are archived for later download via `/digital-marketing/assets`.
     """
     postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-    if not postiz_base_url:
-        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
-
     internal_user_id = resolve_internal_user_id(db, jwt_subject)
-    api_key = _resolve_postiz_api_key(internal_user_id, db)
-    if not api_key:
-        raise HTTPException(
-            status_code=404,
-            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
-        )
 
     _, media_links = extract_marketing_text_and_links(payload)
     if media_links or payload_has_attached_media(payload):
@@ -1197,32 +1351,68 @@ async def postiz_create_post(
         except InstagramMediaPrepareError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("[SOCIAL] Failed to prepare media for Postiz/Instagram")
+            logger.exception("[SOCIAL] Failed to prepare media for posting")
             raise HTTPException(
                 status_code=502,
-                detail="Could not prepare media for Instagram. Check that the image or video URL is publicly reachable.",
+                detail="Could not prepare media. Check that the image or video URL is publicly reachable.",
             ) from exc
 
     payload = coerce_tiktok_privacy_for_unaudited_app(payload)
+    zernio_targets, other_posts = split_postiz_posts(db, internal_user_id, payload)
+    result: Dict[str, Any] = {}
+    publish_ids: List[str] = []
 
-    try:
-        client = PostizClient(postiz_base_url)
-        result = await client.create_post(api_key, payload)
-        publish_ids = extract_publish_ids(result)
-        if isinstance(result, dict):
-            result = {**result, "tiktok_publish_ids": publish_ids}
-        else:
-            result = {"value": result, "tiktok_publish_ids": publish_ids}
-    except PostizAPIError as e:
-        logger.warning("[SOCIAL] Postiz create post failed: %s", e)
-        # Postiz 400s are client/payload problems (wrong media type, settings, etc.).
-        # Keep 502 for upstream/auth/server failures.
-        status_code = (
-            e.status_code
-            if e.status_code in {400, 404, 409, 422, 429}
-            else status.HTTP_502_BAD_GATEWAY
-        )
-        raise HTTPException(status_code=status_code, detail=str(e)) from e
+    if zernio_targets:
+        if not zernio_enabled():
+            raise HTTPException(
+                status_code=400,
+                detail="ZERNIO_API_KEY is not configured. Instagram, Facebook, and TikTok post through Zernio.",
+            )
+        schedule = str(payload.get("type") or "").strip().lower() == "schedule"
+        try:
+            zernio_result = await asyncio.to_thread(
+                publish_targets,
+                db,
+                internal_user_id,
+                zernio_targets,
+                publish_now=not schedule,
+                scheduled_for=str(payload.get("date") or "") if schedule else None,
+            )
+        except ZernioAPIError as exc:
+            status_code = exc.status_code if exc.status_code in {400, 404, 409, 422, 429} else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        result["zernio"] = zernio_result
+        for account, _post in zernio_targets:
+            if account.platform == "tiktok" and account.last_post_id:
+                publish_ids.append(account.last_post_id)
+
+    if other_posts:
+        if not postiz_base_url:
+            raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+        api_key = _resolve_postiz_api_key(internal_user_id, db)
+        if not api_key:
+            raise HTTPException(
+                status_code=404,
+                detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+            )
+        postiz_payload = {**payload, "posts": other_posts}
+        try:
+            client = PostizClient(postiz_base_url)
+            postiz_result = await client.create_post(api_key, postiz_payload)
+            publish_ids.extend(extract_publish_ids(postiz_result))
+            result["postiz"] = postiz_result
+        except PostizAPIError as e:
+            logger.warning("[SOCIAL] Postiz create post failed: %s", e)
+            status_code = (
+                e.status_code
+                if e.status_code in {400, 404, 409, 422, 429}
+                else status.HTTP_502_BAD_GATEWAY
+            )
+            raise HTTPException(status_code=status_code, detail=str(e)) from e
+    elif not zernio_targets:
+        raise HTTPException(status_code=400, detail="Choose at least one account to post to.")
+
+    result["tiktok_publish_ids"] = publish_ids
 
     canonical_agent = normalize_digital_marketing_agent_name(agent_name)
     if canonical_agent:

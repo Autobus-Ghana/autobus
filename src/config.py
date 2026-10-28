@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     BLOTATO_CLIENT_SECRET: str = os.environ.get('BLOTATO_CLIENT_SECRET', '')
     BLOTATO_API_BASE: str = os.environ.get('BLOTATO_API_BASE', 'https://api.blotato.com')
     BLOTATO_OAUTH_BASE: str = os.environ.get('BLOTATO_OAUTH_BASE', 'https://app.blotato.com')
+
+    # Zernio: one profile per customer for Instagram, Facebook, and TikTok inbox + posting.
+    ZERNIO_API_KEY: str = os.environ.get("ZERNIO_API_KEY", "").strip()
+    ZERNIO_API_BASE: str = os.environ.get("ZERNIO_API_BASE", "https://zernio.com/api/v1").strip().rstrip("/")
+    ZERNIO_WEBHOOK_SECRET: str = os.environ.get("ZERNIO_WEBHOOK_SECRET", "").strip()
     
     # Self-hosted n8n workflow engine (admin portal builder). The API key never leaves the backend.
     N8N_BASE_URL: str = os.environ.get("N8N_BASE_URL", "http://n8n:5678").strip().rstrip("/")

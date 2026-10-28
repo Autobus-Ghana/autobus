@@ -16,6 +16,13 @@ class SocialPlatformEnum(str, Enum):
     THREADS = "THREADS"
     BLUESKY = "BLUESKY"
     MASTODON = "MASTODON"
+    PINTEREST = "PINTEREST"
+    REDDIT = "REDDIT"
+    GOOGLE_BUSINESS = "GOOGLE_BUSINESS"
+    SNAPCHAT = "SNAPCHAT"
+    TELEGRAM = "TELEGRAM"
+    DISCORD = "DISCORD"
+    SLACK = "SLACK"
 
 
 # OAuth and Account Connection DTOs

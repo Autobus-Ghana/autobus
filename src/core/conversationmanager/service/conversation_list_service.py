@@ -11,10 +11,12 @@ from core.conversationmanager.dto.conversation_response_dto import (
     ConversationSummaryDTO,
 )
 from core.conversationmanager.service.customer_identity import (
+    SOCIAL_CHANNEL_LABELS,
     customer_channel_key,
     is_instagram_conversation,
     looks_like_phone,
     parse_conversation_user_id,
+    social_channel,
 )
 from core.interventions.model.Intervention import Intervention
 from core.orders.model.order import Order
@@ -272,8 +274,9 @@ class ConversationListService:
                 display_name = display_name or saved
 
         if not username and not resolved_phone and not display_name:
-            if is_instagram_conversation(row.user_id):
-                display_name = "Instagram"
+            channel = social_channel(row.user_id)
+            if channel:
+                display_name = SOCIAL_CHANNEL_LABELS.get(channel, "Message")
             elif looks_like_phone(channel_key):
                 resolved_phone = channel_key
 
@@ -323,7 +326,7 @@ class ConversationListService:
     def _resolve_customer_phone(
         self, conversation_user_id: Optional[str], user_phones: Dict[str, str]
     ) -> Optional[str]:
-        if is_instagram_conversation(conversation_user_id):
+        if social_channel(conversation_user_id):
             return None
         uid = customer_channel_key(conversation_user_id)
         if not uid:
@@ -524,11 +527,16 @@ class ConversationListService:
         if not merchant_id or not channel:
             return False
 
-        if channel.startswith("ig:"):
-            igsid = channel[3:].strip()
-            if not self._send_instagram_agent_reply(merchant_id, igsid, text):
-                raise CustomerDeliveryError("Failed to send Instagram reply to the customer.")
-            return True
+        social = social_channel(uid)
+        if social:
+            if self._send_zernio_agent_reply(uid, text):
+                return True
+            if social == "ig":
+                igsid = channel[3:].strip()
+                if not self._send_instagram_agent_reply(merchant_id, igsid, text):
+                    raise CustomerDeliveryError("Failed to send Instagram reply to the customer.")
+                return True
+            raise CustomerDeliveryError("Failed to send the reply to the customer.")
 
         from core.webhooks.service.whatsapp_service import WhatsAppService
 
@@ -576,6 +584,16 @@ class ConversationListService:
         svc = InstagramOAuthService()
         token = svc.decrypt_token(account.access_token_encrypted)
         return svc.send_text(token, igsid, message)
+
+    def _send_zernio_agent_reply(self, autobus_key: str, message: str) -> bool:
+        from core.socialmedia.service.zernio_client import ZernioAPIError
+        from core.socialmedia.service.zernio_service import send_thread_reply
+
+        try:
+            return send_thread_reply(self.db, autobus_key, message)
+        except ZernioAPIError as exc:
+            logger.warning("[CONVERSATION] Zernio reply failed for %s: %s", autobus_key, exc)
+            return False
 
     def append_human_message_to_session(
         self, user_identifier: str, session_id: int, message: str

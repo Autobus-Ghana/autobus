@@ -21,7 +21,16 @@ from core.instagram.service.instagram_oauth_service import (
     InstagramOAuthService,
     InstagramOAuthState,
 )
+from core.user.model.User import User
 from core.instagram.service.instagram_publish_service import InstagramPublishService
+from core.socialmedia.service.zernio_client import ZernioAPIError
+from core.socialmedia.service.zernio_service import (
+    connect_authorization,
+    disconnect_account as disconnect_zernio_account,
+    find_account as find_zernio_account,
+    list_accounts as list_zernio_accounts,
+    publish_instagram,
+)
 from utilities.dbconfig import get_db
 
 logger = logging.getLogger(__name__)
@@ -58,12 +67,12 @@ class InstagramAccountResponse(BaseModel):
 
 class InstagramConnectResponse(BaseModel):
     authorization_url: str
-    provider: str = "INSTAGRAM"
+    provider: str = "ZERNIO"
     state: str
     redirect_uri: str
     message: str = (
-        "Open authorization_url to link Instagram via Business Login. "
-        "This enables inbox messaging and Digital Marketing posting."
+        "Open authorization_url to link Instagram. "
+        "Inbox messaging and Digital Marketing posting go through Zernio."
     )
 
 
@@ -308,20 +317,28 @@ async def instagram_connect(
         description="After Instagram returns to the HTTPS callback, send users to the mobile app (`app`) or website (`web`).",
     ),
 ):
-    """Return Instagram Business Login authorize URL for the authenticated user."""
+    """Return a Zernio connect URL for Instagram inbox and posting."""
     try:
         user_id = resolve_internal_user_id(db, jwt_subject)
-        svc = InstagramOAuthService()
-        svc.require_config()
-        state = InstagramOAuthState.create(user_id, return_to=return_to)
-        url = svc.build_authorize_url(state)
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        payload = connect_authorization(db, user, "instagram", return_to=return_to)
         return InstagramConnectResponse(
-            authorization_url=url,
-            state=state,
-            redirect_uri=svc.redirect_uri,
+            authorization_url=payload["authorization_url"],
+            provider="ZERNIO",
+            state=payload.get("state") or "",
+            redirect_uri=payload.get("redirect_uri") or "",
+            message=payload.get("message")
+            or "Open authorization_url to link Instagram. Inbox messaging and posting go through Zernio.",
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ZernioAPIError as exc:
+        raise HTTPException(
+            status_code=exc.status_code if exc.status_code < 500 else 502,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("[IG] connect failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -338,7 +355,25 @@ async def list_instagram_accounts(
         .filter(InstagramAccount.user_id == user_id, InstagramAccount.is_active.is_(True))
         .all()
     )
-    return [InstagramAccountResponse.model_validate(r) for r in rows]
+    listed = [InstagramAccountResponse.model_validate(r) for r in rows]
+    seen = {item.id for item in listed}
+    for account in list_zernio_accounts(db, user_id, "instagram"):
+        if account.id in seen:
+            continue
+        listed.append(
+            InstagramAccountResponse(
+                id=account.id,
+                ig_user_id=account.platform_user_id or account.zernio_account_id,
+                username=account.username,
+                name=account.display_name or account.username,
+                account_type="zernio",
+                is_active=account.is_active,
+                messaging_enabled=account.messaging_enabled,
+                publishing_enabled=account.publishing_enabled,
+                permissions="zernio",
+            )
+        )
+    return listed
 
 
 @instagram_routes.delete("/accounts/{account_id}")
@@ -348,6 +383,8 @@ async def disconnect_instagram_account(
     db: Session = Depends(get_db),
 ):
     user_id = resolve_internal_user_id(db, jwt_subject)
+    if disconnect_zernio_account(db, user_id, account_id):
+        return {"status": "ok", "message": "Instagram account disconnected", "provider": "zernio"}
     row = (
         db.query(InstagramAccount)
         .filter(InstagramAccount.id == account_id, InstagramAccount.user_id == user_id)
@@ -377,6 +414,34 @@ async def publish_instagram_post(
     account_id = (body.account_id or "").strip()
     if not account_id:
         raise HTTPException(status_code=400, detail="account_id is required")
+
+    media = [u.strip() for u in (body.media_urls or []) if u and str(u).strip()]
+    if not media:
+        raise HTTPException(
+            status_code=400,
+            detail="Instagram requires at least one public media URL",
+        )
+
+    zernio_account = find_zernio_account(db, user_id, account_id)
+    if zernio_account and zernio_account.platform == "instagram":
+        try:
+            result = publish_instagram(
+                db,
+                zernio_account,
+                caption=body.caption or "",
+                media_urls=media,
+            )
+        except ZernioAPIError as exc:
+            raise HTTPException(
+                status_code=exc.status_code if exc.status_code < 500 else 502,
+                detail=str(exc),
+            ) from exc
+        label = zernio_account.username or zernio_account.display_name or "Instagram"
+        return InstagramPublishResponse(
+            post_id=str(result.get("post_id") or ""),
+            account_id=account_id,
+            message=f"Published to Instagram (@{label})",
+        )
 
     row = (
         db.query(InstagramAccount)

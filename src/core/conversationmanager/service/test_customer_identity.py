@@ -38,6 +38,8 @@ class CustomerIdentityTests(unittest.TestCase):
         self.assertTrue(looks_like_phone("233241234567"))
         self.assertTrue(looks_like_phone("0550748724"))
         self.assertFalse(looks_like_phone("ig:17841401234567890"))
+        self.assertFalse(looks_like_phone("fb:17841401234567890"))
+        self.assertFalse(looks_like_phone("tt:17841401234567890"))
         self.assertFalse(looks_like_phone("17841401234567890"))
         self.assertFalse(looks_like_phone("user123:ig:17841401234567890"))
 

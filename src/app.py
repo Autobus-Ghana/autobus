@@ -261,6 +261,12 @@ async def lifespan(app: FastAPI):
             db.close()
     except Exception as e:
         logger.warning(f"[APP_STARTUP] Credit table init skipped: {e}")
+    try:
+        from core.socialmedia.service.zernio_service import ensure_zernio_webhook
+
+        await ensure_zernio_webhook()
+    except Exception as zernio_err:
+        logger.warning("[APP_STARTUP] Zernio webhook setup skipped: %s", zernio_err)
     yield
     # Shutdown
     logger.info("[APP_SHUTDOWN] Application shutting down...")

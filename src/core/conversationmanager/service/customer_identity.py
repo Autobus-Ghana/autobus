@@ -8,6 +8,19 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+SOCIAL_CHANNELS = ("ig", "fb", "tt", "tw", "rd", "bs", "tg", "sl")
+
+SOCIAL_CHANNEL_LABELS = {
+    "ig": "Instagram",
+    "fb": "Facebook",
+    "tt": "TikTok",
+    "tw": "X",
+    "rd": "Reddit",
+    "bs": "Bluesky",
+    "tg": "Telegram",
+    "sl": "Slack",
+}
+
 
 def parse_conversation_user_id(
     conversation_user_id: Optional[str],
@@ -15,7 +28,7 @@ def parse_conversation_user_id(
     """Split ``{merchant_id}:{channel}:{key}`` or ``{merchant_id}:{phone}``.
 
     Returns ``(merchant_id, channel, customer_key)``.
-    ``channel`` is ``ig`` for Instagram; otherwise ``None``.
+    ``channel`` is a Zernio inbox code (``ig``, ``fb``, ``tt``, ``tw``, and the rest).
     """
     uid = (conversation_user_id or "").strip()
     if not uid:
@@ -29,8 +42,11 @@ def parse_conversation_user_id(
     if not merchant_id or not rest:
         return None, None, uid
 
-    if rest.lower().startswith("ig:"):
-        return merchant_id, "ig", rest[3:].strip()
+    lowered = rest.lower()
+    for channel in SOCIAL_CHANNELS:
+        prefix = f"{channel}:"
+        if lowered.startswith(prefix):
+            return merchant_id, channel, rest[len(prefix):].strip()
     return merchant_id, None, rest
 
 
@@ -44,10 +60,18 @@ def is_instagram_conversation(conversation_user_id: Optional[str]) -> bool:
     return channel == "ig"
 
 
+def social_channel(conversation_user_id: Optional[str]) -> Optional[str]:
+    _, channel, _ = parse_conversation_user_id(conversation_user_id)
+    if channel in SOCIAL_CHANNELS:
+        return channel
+    return None
+
+
 def looks_like_phone(value: Optional[str]) -> bool:
     """True for typical phone numbers; false for social-platform unique IDs."""
     raw = (value or "").strip()
-    if not raw or raw.lower().startswith("ig:"):
+    lowered = raw.lower()
+    if not raw or any(lowered.startswith(f"{channel}:") for channel in SOCIAL_CHANNELS):
         return False
     if ":" in raw:
         return False

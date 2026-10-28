@@ -61,6 +61,41 @@ def _whatsapp_show_typing(whatsapp_service: WhatsAppService, phone_id: str, mess
 webhooks_routes = APIRouter()
 
 
+@webhooks_routes.post("/zernio")
+async def zernio_webhook(request: Request, db: Session = Depends(get_db)):
+    """Inbox, account, and post events from Zernio. One endpoint for every customer."""
+    from core.socialmedia.service.zernio_service import (
+        apply_account_event,
+        claim_webhook_event,
+        handle_inbox_message,
+        webhook_signature_ok,
+    )
+
+    raw_body = await request.body()
+    signature = request.headers.get("X-Zernio-Signature") or request.headers.get("x-zernio-signature")
+    if not webhook_signature_ok(raw_body, signature):
+        raise HTTPException(status_code=401, detail="Invalid Zernio signature")
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if not isinstance(payload, dict):
+        return {"ok": True}
+
+    event = str(payload.get("event") or "")
+    event_id = str(payload.get("id") or "")
+    if not claim_webhook_event(db, event_id, event):
+        return {"ok": True, "duplicate": True}
+
+    if event == "account.connected":
+        apply_account_event(db, payload, connected=True)
+    elif event == "account.disconnected":
+        apply_account_event(db, payload, connected=False)
+    elif event == "message.received":
+        return handle_inbox_message(db, payload)
+    return {"ok": True, "event": event}
+
+
 def _require_public_api_key(x_api_key: Optional[str] = Header(None, alias="X-Api-Key")) -> None:
     expected = (settings.PUBLIC_WEBHOOK_API_KEY or "").strip()
     if not expected:
