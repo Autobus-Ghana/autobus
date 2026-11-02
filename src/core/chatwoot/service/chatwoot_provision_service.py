@@ -14,7 +14,6 @@ from core.chatwoot.service.chatwoot_api_service import (
     derive_chatwoot_password,
 )
 from core.chatwoot.service.chatwoot_org_service import ChatwootOrgService
-from core.subscription.service.subscription_service import SubscriptionService
 from core.user.model.User import User
 from utilities.crypto import encrypt_secret
 
@@ -25,8 +24,8 @@ async def ensure_chatwoot_provisioned(db: Session, user_id: str) -> Optional[Cha
     """
     Ensure the user has a Chatwoot workspace mapping (mirrors Postiz `_ensure_postiz_api_key`).
 
-    Called on first Chatwoot access for subscribed users who subscribed before Chatwoot
-    was online or before platform credentials were configured.
+    Called on first Chatwoot access. Inbox replies are charged from the credit wallet,
+    so every account gets a workspace without a subscription.
     """
     org = ChatwootOrgService(db)
     existing = org.get_for_user(user_id)
@@ -34,9 +33,6 @@ async def ensure_chatwoot_provisioned(db: Session, user_id: str) -> Optional[Cha
         return existing
 
     if not chatwoot_enabled():
-        return None
-
-    if not SubscriptionService(db).get_user_active_subscription(user_id):
         return None
 
     user = db.query(User).filter(User.id == user_id).first()
