@@ -685,6 +685,11 @@ def handle_instagram_webhook(payload: dict, db: Session):
     """Handle Instagram Login messaging webhooks (inbox DMs)."""
     from core.instagram.model.InstagramAccount import InstagramAccount
     from core.instagram.service.instagram_oauth_service import InstagramOAuthService
+    from core.webhooks.bot_loop_guard import (
+        is_recent_bot_reply,
+        remember_bot_reply,
+        reply_budget_ok,
+    )
 
     entries = payload.get("entry") or []
     logger.info(
@@ -799,6 +804,23 @@ def handle_instagram_webhook(payload: dict, db: Session):
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to send Instagram reply",
             )
+        username, display_name = _ig_event_profile(event)
+        if not username:
+            profile = svc.fetch_igsid_profile(token, sender_id)
+            username = str(profile.get("username") or "").strip()
+            display_name = display_name or str(profile.get("name") or "").strip()
+        _remember_customer_identity(
+            nlu_user_id, username=username, display_name=display_name
+        )
+        if is_recent_bot_reply(text):
+            logger.info(
+                "[IG webhook] skip bot reply echoed by @%s (%s)",
+                username or "-",
+                sender_id,
+            )
+            continue
+        if not reply_budget_ok(nlu_user_id):
+            continue
         svc.send_sender_action(token, sender_id, "mark_seen")
         svc.send_sender_action(token, sender_id, "typing_on")
         nlu_system = get_nlu_system()
@@ -811,14 +833,6 @@ def handle_instagram_webhook(payload: dict, db: Session):
         else:
             reply = nlu_system.process_message(nlu_user_id, text, image_url=image_url or None)
             reply_images = nlu_system.take_reply_images()
-        username, display_name = _ig_event_profile(event)
-        if not username:
-            profile = svc.fetch_igsid_profile(token, sender_id)
-            username = str(profile.get("username") or "").strip()
-            display_name = display_name or str(profile.get("name") or "").strip()
-        _remember_customer_identity(
-            nlu_user_id, username=username, display_name=display_name
-        )
         outbound = _nlu_reply_text(reply)
         if not outbound and not reply_images:
             svc.send_sender_action(token, sender_id, "typing_off")
@@ -826,6 +840,7 @@ def handle_instagram_webhook(payload: dict, db: Session):
             continue
         sent = True
         if outbound:
+            remember_bot_reply(outbound)
             sent = svc.send_text(token, sender_id, outbound)
         for reply_image in reply_images:
             svc.send_image(token, sender_id, reply_image)

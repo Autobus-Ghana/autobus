@@ -42,6 +42,7 @@ from core.socialmedia.service.zernio_mapping import (
 from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
 from core.user.model.User import User
+from core.webhooks.bot_loop_guard import is_recent_bot_reply, remember_bot_reply, reply_budget_ok
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +556,7 @@ def send_thread_reply(db: Session, autobus_key: str, text: str, image_url: str =
     sent = True
     body = (text or "").strip()
     if body:
+        remember_bot_reply(body)
         client.send_inbox_message(
             row.zernio_conversation_id,
             account_id=row.zernio_account_id,
@@ -671,6 +673,15 @@ def handle_inbox_message(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]
         participant_id=parts["sender_id"],
         username=parts["sender_username"],
     )
+    if is_recent_bot_reply(text):
+        logger.info(
+            "[ZERNIO] skip bot reply echoed by @%s (%s)",
+            parts["sender_username"] or "-",
+            parts["sender_id"],
+        )
+        return {"status": "ok", "message": "Ignored a reply sent by another Autobus inbox"}
+    if not reply_budget_ok(autobus_key):
+        return {"status": "ok", "message": "Auto replies paused for this conversation"}
 
     nlu = get_nlu_system()
     paused = CreditService(db).consume_or_pause(merchant_id, CreditType.LLM.value, 1.0, "zernio_inbox")
