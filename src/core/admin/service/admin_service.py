@@ -741,17 +741,30 @@ class AdminService:
         role = platform_role_of(user) or "admin"
         role_label = ROLE_TO_LABEL.get(role, "Admin")
         portal = (os.getenv("ADMIN_PORTAL_URL") or "https://admin.useautobus.com").rstrip("/")
-        result = OTPService(self.db).send_otp_email(
+        greeting = (
+            f"Hi {user.fullname},\n\n"
+            f"You've been invited to the Autobus admin portal as {role_label}.\n\n"
+        )
+        if user.enabled:
+            body = (
+                greeting
+                + f"Sign in at {portal} with {user.email} and your existing Autobus PIN.\n"
+            )
+        else:
+            default_pin = "".join(secrets.choice(string.digits) for _ in range(4))
+            user.hashed_password = self.auth.hash_password(default_pin)
+            self.db.commit()
+            body = (
+                greeting
+                + f"Sign in at {portal} with:\n"
+                f"Email: {user.email}\n"
+                f"Default PIN: {default_pin}\n\n"
+                f"You can change this PIN anytime from {portal}/forgot-password.\n"
+            )
+        result = OTPService(self.db).send_email(
             user.email,
             subject="You're invited to Autobus Admin",
-            body_template=(
-                f"Hi {user.fullname},\n\n"
-                f"You've been invited to the Autobus admin portal as {role_label}.\n\n"
-                "Your verification code is: {otp}\n"
-                "It is valid for {seconds} seconds.\n\n"
-                f"Open {portal}/forgot-password, enter {user.email}, verify this code, "
-                "and set your password to sign in.\n"
-            ),
+            body=body,
         )
         if not result.success:
             raise HTTPException(

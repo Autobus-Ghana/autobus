@@ -191,6 +191,33 @@ class OTPService:
                 message="Failed to send OTP. Please try again."
             )
 
+    def send_email(self, email: str, *, subject: str, body: str) -> OTPSendResponse:
+        """Send a plain email without creating an OTP."""
+        try:
+            sender_domain = (
+                getattr(settings, "ZEPTOMAIL_SENDER_DOMAIN", None)
+                or os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com")
+            ).strip()
+            from_email = settings.ZEPTOMAIL_FROM_EMAIL or f"no-reply@{sender_domain}"
+            token = self._zeptomail_token()
+            if not token:
+                logger.error("ZEPTOMAIL_SMTP_PASSWORD/ZEPTOMAIL_API_TOKEN not set; cannot send email")
+                return OTPSendResponse(success=False, message="Email service not configured")
+
+            sent, send_error = self._deliver_email(from_email, email, subject, body, token)
+            if sent:
+                logger.info("Email sent successfully to %s", email)
+                return OTPSendResponse(success=True, message="Email sent", data={"email": email})
+
+            logger.error("Failed to send email to %s: %s", email, send_error)
+            return OTPSendResponse(
+                success=False,
+                message=send_error or "Failed to send email. Please try again.",
+            )
+        except Exception as e:
+            logger.error(f"Error sending email to {email}: {str(e)}")
+            return OTPSendResponse(success=False, message="Failed to send email. Please try again.")
+
     @staticmethod
     def _zeptomail_token() -> str:
         raw = (
