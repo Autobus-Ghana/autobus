@@ -313,6 +313,8 @@ class AuthService:
         if exists is True:
             db_user = self._adopt_green_account(email, password)
             if db_user is None:
+                db_user = self._invited_admin_login(identifier, password)
+            if db_user is None:
                 raise InvalidCredentialsError()
         else:
             try:
@@ -351,6 +353,18 @@ class AuthService:
         self.db.commit()
         self.db.refresh(db_user)
         self._publish_green_account(db_user)
+
+    def _invited_admin_login(self, identifier: str, password: str) -> Optional[User]:
+        """Accept the emailed default PIN for an admin who has not activated yet."""
+        from core.auth.dependencies import platform_role_of
+
+        try:
+            db_user = self.authenticate_user(identifier, password)
+        except InvalidCredentialsError:
+            return None
+        if db_user.enabled or not platform_role_of(db_user):
+            return None
+        return db_user
 
     def _email_for_green_lookup(self, identifier: str) -> Optional[str]:
         cleaned = (identifier or "").strip()
