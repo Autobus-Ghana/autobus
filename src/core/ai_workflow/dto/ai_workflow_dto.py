@@ -8,6 +8,10 @@ class BusinessCreateRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=1000, description="Optional description")
 
 
+class BusinessRenameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120, description="New business folder name")
+
+
 class BusinessResponse(BaseModel):
     id: str
     name: str

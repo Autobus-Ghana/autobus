@@ -156,6 +156,67 @@ class AIWorkflowService:
             updated_at=_iso(biz.updated_at) if biz.updated_at else None,
         )
 
+    def rename_business(self, business_id_or_name: str, new_name: str) -> BusinessResponse:
+        cleaned = new_name.strip()
+        if not cleaned:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Business name cannot be empty.",
+            )
+
+        target = (
+            self.db.query(AIWorkflowBusiness)
+            .filter(
+                or_(
+                    AIWorkflowBusiness.id == business_id_or_name,
+                    func.lower(AIWorkflowBusiness.name) == func.lower(business_id_or_name),
+                )
+            )
+            .first()
+        )
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Business folder not found",
+            )
+
+        clash = (
+            self.db.query(AIWorkflowBusiness)
+            .filter(func.lower(AIWorkflowBusiness.name) == func.lower(cleaned))
+            .first()
+        )
+        if clash and clash.id != target.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A business with that name already exists.",
+            )
+
+        previous_name = target.name
+        target.name = cleaned
+        self.db.query(AIWorkflow).filter(
+            or_(
+                AIWorkflow.business_id == target.id,
+                func.lower(AIWorkflow.business_name) == func.lower(previous_name),
+            )
+        ).update({AIWorkflow.business_name: cleaned}, synchronize_session=False)
+        self.db.commit()
+        self.db.refresh(target)
+
+        count = (
+            self.db.query(func.count(AIWorkflow.id))
+            .filter(func.lower(AIWorkflow.business_name) == func.lower(cleaned))
+            .scalar()
+            or 0
+        )
+        return BusinessResponse(
+            id=target.id,
+            name=target.name,
+            description=target.description,
+            workflow_count=count,
+            created_at=_iso(target.created_at),
+            updated_at=_iso(target.updated_at) if target.updated_at else None,
+        )
+
     def delete_business(self, business_id_or_name: str) -> None:
         target = (
             self.db.query(AIWorkflowBusiness)

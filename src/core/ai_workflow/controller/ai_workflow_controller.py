@@ -10,6 +10,7 @@ from core.ai_workflow.dto.ai_workflow_dto import (
     AiSettingsTestResponse,
     AiSettingsUpdateRequest,
     BusinessCreateRequest,
+    BusinessRenameRequest,
     BusinessResponse,
     GenerateWorkflowRequest,
     GenerateWorkflowResponse,
@@ -58,6 +59,21 @@ def create_business(
 ):
     _ = admin
     return AIWorkflowService(db).create_business(payload)
+
+
+@ai_workflow_routes.patch(
+    "/businesses/{id_or_name}",
+    response_model=BusinessResponse,
+    summary="Rename a workflow business folder",
+)
+def rename_business(
+    id_or_name: str,
+    payload: BusinessRenameRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return AIWorkflowService(db).rename_business(id_or_name, payload.name)
 
 
 @ai_workflow_routes.delete(
