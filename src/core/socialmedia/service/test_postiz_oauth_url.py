@@ -5,7 +5,11 @@ from __future__ import annotations
 import unittest
 from urllib.parse import parse_qs, urlsplit
 
-from core.socialmedia.service.postiz_api_service import apply_tiktok_oauth_scopes
+from core.socialmedia.service.postiz_api_service import (
+    PostizAPIError,
+    apply_tiktok_oauth_scopes,
+    require_direct_provider_url,
+)
 
 
 class ApplyTiktokOauthScopesTest(unittest.TestCase):
@@ -56,6 +60,20 @@ class ApplyTiktokOauthScopesTest(unittest.TestCase):
     def test_ignores_non_tiktok_host(self):
         url = "https://example.com/oauth?scope=video.list,user.info.basic"
         self.assertEqual(apply_tiktok_oauth_scopes(url, slug="tiktok"), url)
+
+
+class RequireDirectProviderUrlTest(unittest.TestCase):
+    def test_accepts_tiktok_and_google(self):
+        tiktok = "https://www.tiktok.com/v2/auth/authorize/?client_key=abc"
+        google = "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc"
+        self.assertEqual(require_direct_provider_url(tiktok, "tiktok"), tiktok)
+        self.assertEqual(require_direct_provider_url(google, "youtube"), google)
+
+    def test_rejects_zernio_for_tiktok_and_youtube(self):
+        url = "https://zernio.com/connect/youtube"
+        for slug in ("tiktok", "youtube"):
+            with self.assertRaises(PostizAPIError):
+                require_direct_provider_url(url, slug)
 
 
 if __name__ == "__main__":

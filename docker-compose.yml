@@ -203,6 +203,13 @@ services:
       CONTABO_BUCKET: ${CONTABO_BUCKET:-autobus}
       CONTABO_ENDPOINT: ${CONTABO_ENDPOINT:-https://usc1.contabostorage.com}
 
+      # Postiz holds the TikTok app and Google OAuth client. Digital Marketing
+      # asks Postiz for the provider sign-in URL, then TikTok and Google
+      # send the user back to postiz.useautobus.com.
+      POSTIZ_BASE_URL: ${POSTIZ_BASE_URL:-http://postiz:5000}
+      POSTIZ_PUBLIC_URL: ${POSTIZ_PUBLIC_URL:-https://postiz.useautobus.com}
+      POSTIZ_DATABASE_URL: ${POSTIZ_DATABASE_URL:-postgresql://postiz-user:postiz-password@postiz-postgres:5432/postiz-db-local}
+      # Same TikTok app as Postiz. Used to refresh an expired access token.
       TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID:-}
       TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
@@ -267,7 +274,7 @@ services:
         condition: service_healthy
     networks:
       - autobus_network
-      # Shared platform network (Caddy, RAG API)
+      # Shared platform network (Caddy, Postiz, RAG API)
       - caddy
       # RAG internal network (Qdrant, TEI, rag-api)
       - greenbrain_rag

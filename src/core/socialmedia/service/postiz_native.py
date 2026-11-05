@@ -20,6 +20,7 @@ from core.socialmedia.service.postiz_api_service import (
     PostizAPIError,
     PostizClient,
     apply_tiktok_oauth_scopes,
+    require_direct_provider_url,
     derive_postiz_password,
     normalize_postiz_integrations_list,
 )
@@ -206,6 +207,7 @@ async def build_native_connect(
         ) from oauth_error
 
     authorization_url = apply_tiktok_oauth_scopes(authorization_url, slug=postiz_slug)
+    authorization_url = require_direct_provider_url(authorization_url, postiz_slug)
     if postiz_slug == "tiktok":
         message = "Redirect the user to authorize TikTok with TikTok."
     else:

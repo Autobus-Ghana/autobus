@@ -537,6 +537,39 @@ def apply_facebook_login_config_id(
     )
 
 
+def oauth_host(authorization_url: str) -> str:
+    """Hostname of an OAuth URL, without a leading www."""
+    parts = urlsplit((authorization_url or "").strip())
+    host = (parts.netloc or "").split("@")[-1].split(":")[0].lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def require_direct_provider_url(authorization_url: str, slug: str) -> str:
+    """TikTok must open TikTok. YouTube must open Google. Never Zernio."""
+    url = (authorization_url or "").strip()
+    host = oauth_host(url)
+    provider = (slug or "").strip().lower()
+    if host == "zernio.com" or host.endswith(".zernio.com"):
+        label = "TikTok" if provider == "tiktok" else "YouTube"
+        raise PostizAPIError(
+            f"{label} has to open its own sign-in. This link pointed at Zernio.",
+            status_code=502,
+        )
+    allowed = {
+        "tiktok": {"tiktok.com"},
+        "youtube": {"accounts.google.com", "accounts.youtube.com"},
+    }.get(provider, set())
+    if allowed and host not in allowed:
+        label = "TikTok" if provider == "tiktok" else "Google"
+        raise PostizAPIError(
+            f"{label} sign-in did not start. Try linking again.",
+            status_code=502,
+        )
+    return url
+
+
 # Postiz hardcodes this on the TikTok authorize URL. TikTok no longer offers it
 # as an addable scope, so the whole login fails with "correct the following: scope".
 _TIKTOK_DROPPED_SCOPES = frozenset({"video.list", "video.create"})
