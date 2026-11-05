@@ -194,6 +194,15 @@ def convert_to_local_ghana_format(phone: str) -> str:
         logger.warning(f"Phone number has no digits: {phone}")
         return phone
 
+    # International dialing prefix: 00233550748724 -> 233550748724
+    if cleaned_phone.startswith('00') and len(cleaned_phone) > 2:
+        cleaned_phone = cleaned_phone[2:]
+
+    # WhatsApp sometimes sends the trunk 0 after the country code:
+    # 2330550748724 (13 digits) -> 0550748724
+    if cleaned_phone.startswith('2330') and len(cleaned_phone) == 13:
+        cleaned_phone = cleaned_phone[3:]
+
     # Case 1: International format with 233 prefix (12 digits total)
     # Example: 233550748724 -> 0550748724
     if cleaned_phone.startswith('233') and len(cleaned_phone) == 12:

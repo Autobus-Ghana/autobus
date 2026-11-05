@@ -71,7 +71,7 @@ async def list_social_accounts(
     db: Session = Depends(get_db),
     _: None = Depends(require_workflow_key),
 ):
-    """Connected Postiz accounts for one business. Use the ids in a social-post step."""
+    """Connected social accounts for one business. Use the ids in a social-post step."""
     return await WorkflowActionService(db).list_social_accounts(business_user_id)
 
 
@@ -81,5 +81,5 @@ async def run_social_post(
     db: Session = Depends(get_db),
     _: None = Depends(require_workflow_key),
 ):
-    """Multi-account posting: publish one caption to the Postiz accounts you name."""
+    """Multi-account posting: publish one caption to the connected accounts you name."""
     return await WorkflowActionService(db).social_post(payload)

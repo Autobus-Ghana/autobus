@@ -29,12 +29,13 @@ class OwnerAgentCampaignTest(unittest.TestCase):
         ]
 
     def test_image_skips_youtube_and_tiktok_when_posting_to_all(self):
-        matched = match_destinations(self.dests, has_video=False)
-        self.assertEqual([d["id"] for d in matched], ["autobus-ig-ig1"])
+        dests = self.dests + [_dest("fb1", "facebook", "zernio", "Facebook")]
+        matched = match_destinations(dests, has_video=False)
+        self.assertEqual([d["id"] for d in matched], ["fb1"])
 
     def test_video_posts_to_all_linked(self):
         matched = match_destinations(self.dests, has_video=True)
-        self.assertEqual([d["id"] for d in matched], ["autobus-ig-ig1", "yt1", "tt1"])
+        self.assertEqual([d["id"] for d in matched], ["yt1", "tt1"])
 
     def test_platforms_filter(self):
         matched = match_destinations(self.dests, platforms=["tiktok", "youtube"], has_video=True)

@@ -7,52 +7,32 @@ import hmac
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
-# Platforms connected through Zernio. API values match GET /v1/connect/{platform}.
+# Platforms connected through Zernio. TikTok uses TikTok's API and YouTube uses Google's API.
 ZERNIO_PLATFORMS = (
     "twitter",
     "instagram",
     "facebook",
-    "linkedin",
-    "tiktok",
-    "youtube",
-    "pinterest",
-    "reddit",
-    "bluesky",
-    "threads",
-    "googlebusiness",
     "snapchat",
-    "telegram",
-    "discord",
-    "slack",
     "whatsapp",
 )
 
 # Messaging-only platforms. They never appear as posting targets.
 ZERNIO_MESSAGING_ONLY_PLATFORMS = frozenset({"whatsapp"})
 
-# Direct-message inboxes. Comment-only platforms stay on the posting list.
+# Digital marketing accounts that still post through Zernio.
+ZERNIO_MARKETING_PLATFORMS = frozenset({"facebook", "twitter", "snapchat"})
+
+# Inbox links. Instagram posting also uses the Instagram connect path.
 ZERNIO_INBOX_PLATFORMS = (
     "instagram",
-    "facebook",
-    "tiktok",
-    "twitter",
-    "reddit",
-    "bluesky",
-    "telegram",
-    "slack",
     "whatsapp",
+    "twitter",
 )
 
 # Autobus conversation channel segment for each inbox platform.
 CHANNEL_BY_PLATFORM = {
     "instagram": "ig",
-    "facebook": "fb",
-    "tiktok": "tt",
     "twitter": "tw",
-    "reddit": "rd",
-    "bluesky": "bs",
-    "telegram": "tg",
-    "slack": "sl",
     "whatsapp": "wa",
 }
 PLATFORM_BY_CHANNEL = {value: key for key, value in CHANNEL_BY_PLATFORM.items()}

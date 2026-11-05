@@ -115,6 +115,7 @@ class CustomerService:
         network: Optional[str] = None,
         bank_code: Optional[str] = None,
         email: Optional[str] = None,
+        allow_unknown_network: bool = False,
     ) -> Tuple[bool, Customer, str]:
         """
         Add a new customer for the user.
@@ -134,31 +135,51 @@ class CustomerService:
             if not resolved_user_id:
                 return False, None, "User not found. Please log in again."
 
+            name = (name or "").strip()[:100] or "Customer"
+            customer_number = (customer_number or "").strip()
+            if len(customer_number) > 20:
+                digits_only = re.sub(r"\D", "", customer_number)
+                customer_number = (digits_only or customer_number)[:20]
+            if not customer_number:
+                return False, None, "Customer number is required."
             logger.info(f"[BENEFICIARY_SERVICE] Adding customer for user: {resolved_user_id}, name: {name}")
 
             # If network not provided, try to detect it
             if not network:
                 detected_network, network_msg = NetworkDetector.detect_network_from_phone(customer_number)
                 if not detected_network:
-                    return False, None, f"Could not auto-detect network: {network_msg}"
-                network = detected_network.value if hasattr(detected_network, "value") else str(detected_network)
-                logger.info(f"[BENEFICIARY_SERVICE] Auto-detected network: {network}")
+                    if not allow_unknown_network:
+                        return False, None, f"Could not auto-detect network: {network_msg}"
+                    # Chat orders include non-Ghana and non-mobile numbers. Keep the
+                    # contact anyway; OTH is not a mobile-money wallet.
+                    network = "OTH"
+                    logger.info(
+                        "[BENEFICIARY_SERVICE] Saving contact without a mobile-money network: %s",
+                        network_msg,
+                    )
+                else:
+                    network = detected_network.value if hasattr(detected_network, "value") else str(detected_network)
+                    logger.info(f"[BENEFICIARY_SERVICE] Auto-detected network: {network}")
             else:
                 network = network.upper()
 
-            # Validate network
             network_enum = getattr(Network, network, None)
-            if not network_enum:
-                valid_networks = [
-                    Network.MTN, Network.VOD, Network.AIR,
-                    Network.BNK, Network.MAS, Network.VIS
-                ]
-                return False, None, f"Invalid network: {network}. Must be one of: {', '.join(valid_networks)}"
+            if network != "OTH":
+                # Validate network
+                if not network_enum:
+                    valid_networks = [
+                        Network.MTN, Network.VOD, Network.AIR,
+                        Network.BNK, Network.MAS, Network.VIS
+                    ]
+                    return False, None, f"Invalid network: {network}. Must be one of: {', '.join(valid_networks)}"
 
-            # Validate customer number for this network
-            is_valid, validation_msg = NetworkDetector.validate_customer_number(customer_number, network_enum)
-            if not is_valid:
-                return False, None, f"Invalid customer number for {network}: {validation_msg}"
+                # Validate customer number for this network
+                is_valid, validation_msg = NetworkDetector.validate_customer_number(customer_number, network_enum)
+                if not is_valid:
+                    if not allow_unknown_network:
+                        return False, None, f"Invalid customer number for {network}: {validation_msg}"
+                    network = "OTH"
+                    network_enum = None
 
             # If bank network, validate bank code
             if network_enum == Network.BNK:
@@ -181,7 +202,10 @@ class CustomerService:
                 return False, None, f"Customer '{existing.name}' with this {network} account already exists"
 
             # Determine account type and map to the DB enum values
-            detected_account_type = NetworkDetector.determine_account_type(network_enum)
+            if network_enum is None:
+                detected_account_type = AccountType.MOBILE_MONEY
+            else:
+                detected_account_type = NetworkDetector.determine_account_type(network_enum)
             if isinstance(detected_account_type, str):
                 account_type_key = detected_account_type.lower()
             else:

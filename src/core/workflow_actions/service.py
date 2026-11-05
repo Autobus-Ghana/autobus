@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -21,14 +20,15 @@ from core.socialmedia.service.instagram_media_prepare import (
     InstagramMediaPrepareError,
     InstagramMediaPrepareService,
 )
-from core.socialmedia.service.postiz_api_service import (
-    PostizAPIError,
-    PostizClient,
-    coerce_tiktok_privacy_for_unaudited_app,
-    normalize_postiz_integrations_list,
-)
 from core.socialmedia.service.postiz_marketing_extract import extract_marketing_text_and_links
-from core.socialmedia.service.tiktok_direct_post import extract_publish_ids
+from core.socialmedia.service.postiz_api_service import PostizAPIError
+from core.socialmedia.service.postiz_native import (
+    list_native_integrations,
+    publish_marketing_posts,
+)
+from core.socialmedia.service.tiktok_direct_post import coerce_tiktok_privacy_for_unaudited_app
+from core.socialmedia.service.zernio_client import ZernioAPIError
+from core.socialmedia.service.zernio_service import posting_integrations
 from core.user.model.User import User
 from core.workflow_actions.dto import (
     CustomerServiceActionRequest,
@@ -144,7 +144,7 @@ class WorkflowActionService:
         if not accounts:
             raise HTTPException(
                 status_code=404,
-                detail="This business has no connected social accounts in Postiz.",
+                detail="This business has no connected social accounts.",
             )
         if not wanted:
             raise HTTPException(
@@ -190,22 +190,15 @@ class WorkflowActionService:
             except InstagramMediaPrepareError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        api_key = self._postiz_key(user.id)
-        client = PostizClient(self._postiz_base_url())
         try:
-            result = await client.create_post(api_key, body)
-        except PostizAPIError as exc:
+            result = await publish_marketing_posts(self.db, user.id, body)
+        except (ZernioAPIError, PostizAPIError) as exc:
             status_code = (
                 exc.status_code
-                if getattr(exc, "status_code", 0) in {400, 404, 409, 422, 429}
+                if getattr(exc, "status_code", 0) in {400, 404, 409, 422, 429, 502, 503}
                 else status.HTTP_502_BAD_GATEWAY
             )
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-
-        if isinstance(result, dict):
-            result = {**result, "tiktok_publish_ids": extract_publish_ids(result)}
-        else:
-            result = {"value": result, "tiktok_publish_ids": extract_publish_ids(result)}
 
         try:
             text, links = extract_marketing_text_and_links(body)
@@ -223,27 +216,19 @@ class WorkflowActionService:
             "module": "multi_account_posting",
             "businessUserId": user.id,
             "postedTo": [row["id"] for row in selected],
-            "postiz": result,
+            "publish": result,
         }
 
     async def _load_integrations(self, user_id: str) -> List[Dict[str, str]]:
-        api_key = self._postiz_key(user_id)
-        client = PostizClient(self._postiz_base_url())
-        try:
-            raw = await client.list_integrations(api_key)
-        except PostizAPIError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
         rows: List[Dict[str, str]] = []
-        for item in normalize_postiz_integrations_list(raw):
+        for item in posting_integrations(self.db, user_id) + list_native_integrations(user_id, self.db):
             if item.get("disabled") is True:
                 continue
             integration_id = str(item.get("id") or "").strip()
             if not integration_id:
                 continue
-            identifier = str(
-                item.get("identifier") or item.get("providerIdentifier") or item.get("provider") or ""
-            ).strip().lower()
-            name = str(item.get("name") or item.get("profile") or identifier or integration_id)
+            identifier = str(item.get("identifier") or "").strip().lower()
+            name = str(item.get("name") or identifier or integration_id)
             rows.append(
                 {
                     "id": integration_id,
@@ -252,28 +237,6 @@ class WorkflowActionService:
                 }
             )
         return rows
-
-    def _postiz_base_url(self) -> str:
-        base = os.getenv("POSTIZ_BASE_URL", "").strip()
-        if not base:
-            raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL is not configured.")
-        return base
-
-    def _postiz_key(self, user_id: str) -> str:
-        from core.socialmedia.service.postiz_org_service import PostizOrgService
-
-        key = PostizOrgService(self.db).get_public_api_key_for_user(user_id)
-        if not key:
-            key = (
-                os.getenv("POSTIZ_PUBLIC_API_KEY", "").strip()
-                or os.getenv("POSTIZ_GLOBAL_PUBLIC_API_KEY", "").strip()
-            )
-        if not key:
-            raise HTTPException(
-                status_code=404,
-                detail="No Postiz API key found for this business.",
-            )
-        return key
 
     def _postiz_payload(
         self,
@@ -320,7 +283,7 @@ def _settings_for(identifier: str, content: str, tiktok_privacy: str) -> Dict[st
             "is_trial_reel": False,
             "collaborators": [],
         }
-    if kind == "x":
+    if kind in {"x", "twitter"}:
         return {"__type": "x", "who_can_reply_post": "everyone", "community": ""}
     if kind == "youtube":
         return {

@@ -13,8 +13,10 @@ from core.user.model.User import User
 from core.auth.dependencies import (
     validate_token,
     get_current_user as get_current_user_orm,
+    get_manager_id_from_jwt,
     require_admin,
     require_self_or_admin,
+    resolve_session_manager,
     resolve_user_from_jwt,
 )
 
@@ -40,6 +42,7 @@ from core.user.dto.request.notification_settings_update_request import (
 )
 from core.user.dto.request.profile_image_update_request import ProfileImageUpdateRequest
 from core.user.dto.request.sender_email_update_request import SenderEmailUpdateRequest
+from core.user.dto.request.two_factor_contact_request import TwoFactorContactRequest
 from core.notification.service.notification_service import NotificationService
 from core.notification.dto.response.paged_notifications import PagedNotificationResponse
 from core.notification.model.Notification import NotificationStatus, NotificationType
@@ -246,6 +249,53 @@ def get_user_receipts(
     require_self_or_admin(user_id, current_user)
     receipt_service = ReceiptService(db)
     return receipt_service.get_user_receipts(user_id, limit)
+
+
+def _login_account(authjwt: AuthJWT, db: Session) -> User:
+    """The signed-in account, not a business switched into for this session."""
+    current = resolve_user_from_jwt(authjwt, db)
+    return resolve_session_manager(authjwt, db, current)
+
+
+@user_routes.get("/me/2fa")
+def get_my_two_factor(authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
+    """Phone and email already used for sign-in codes. 2FA is on for every account."""
+    account = _login_account(authjwt, db)
+    return UserService(db).two_factor_status(account)
+
+
+@user_routes.post("/me/2fa")
+def update_my_two_factor(
+    payload: TwoFactorContactRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Change the phone or email that receives sign-in codes, after an OTP to the new contact."""
+    current = resolve_user_from_jwt(authjwt, db)
+    account = resolve_session_manager(authjwt, db, current)
+    previous_email = (account.email or "").strip().lower()
+    status_body, email_changed = UserService(db).change_two_factor_contact(
+        account,
+        channel=payload.channel,
+        value=payload.value,
+        otp=payload.otp,
+    )
+    subject = (authjwt.get_jwt_subject() or "").strip().lower()
+    if email_changed and subject == previous_email:
+        from core.auth.service.authservice import AuthService
+
+        db.refresh(current)
+        manager_id = get_manager_id_from_jwt(authjwt) or account.id
+        tokens = AuthService(db).issue_session_tokens(
+            current,
+            manager_id,
+            status="Email updated",
+        )
+        status_body["access_token"] = tokens["access_token"]
+        status_body["refresh_token"] = tokens["refresh_token"]
+        status_body["token_type"] = tokens["token_type"]
+        status_body["expires_in"] = tokens["expires_in"]
+    return status_body
 
 
 @user_routes.put("/me", response_model=UserResponse)

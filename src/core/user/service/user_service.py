@@ -7,11 +7,13 @@ from core.auth.service.sessiondriver import SessionDriver, TokenData
 from another_fastapi_jwt_auth import AuthJWT
 from core.exceptions import *
 from utilities.dbconfig import SessionLocal
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
 from core.user.model.User import User
 import logging
+import re
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -356,3 +358,111 @@ class UserService:
             "company": user.company,
             "sender_email": sender_email,
         }
+
+    def two_factor_status(self, user: User) -> dict:
+        """Phone OTP and email codes are already required for this account."""
+        return {
+            "phone": (user.phone or "").strip(),
+            "email": (user.email or "").strip(),
+            "enabled": True,
+        }
+
+    def change_two_factor_contact(
+        self,
+        user: User,
+        *,
+        channel: str,
+        value: str,
+        otp: str,
+    ) -> tuple[dict, bool]:
+        """Replace the phone or email that receives sign-in codes.
+
+        The new contact must match a code from /api/v1/otp/send. Returns the
+        updated status and whether the login email changed.
+        """
+        from core.otp.service.otpservice import OTPService
+
+        channel = (channel or "").strip().lower()
+        raw = (value or "").strip()
+        code = (otp or "").strip()
+        if channel not in {"phone", "email"}:
+            raise HTTPException(status_code=400, detail="Choose phone or email.")
+
+        if channel == "phone":
+            phone = raw
+            digits = re.sub(r"\D", "", phone)
+            if len(digits) < 9:
+                raise HTTPException(status_code=400, detail="Enter a valid phone number.")
+            current_digits = re.sub(r"\D", "", user.phone or "")
+            if digits == current_digits:
+                return self.two_factor_status(user), False
+            clash = (
+                self.db.query(User)
+                .filter(User.phone == phone, User.id != user.id)
+                .first()
+            )
+            if clash:
+                raise HTTPException(
+                    status_code=409,
+                    detail="That phone number is already used by another account.",
+                )
+            if len(code) < 4 or not OTPService(self.db).validate_otp(phone=phone, otp=code):
+                raise HTTPException(
+                    status_code=400,
+                    detail="That code is incorrect or has expired. Request a new code.",
+                )
+            user.phone = phone
+            email_changed = False
+        else:
+            email = OTPService.normalize_email(raw)
+            if (
+                "@" not in email
+                or email.startswith("@")
+                or email.endswith("@")
+                or " " in email
+                or email.endswith("@phone.useautobus.com")
+            ):
+                raise HTTPException(status_code=400, detail="Enter a valid email.")
+            if email == OTPService.normalize_email(user.email):
+                return self.two_factor_status(user), False
+            clash = (
+                self.db.query(User)
+                .filter(func.lower(User.email) == email, User.id != user.id)
+                .first()
+            )
+            if clash:
+                raise HTTPException(
+                    status_code=409,
+                    detail="That email is already used by another account.",
+                )
+            if len(code) < 4 or not OTPService(self.db).validate_otp(email=email, otp=code):
+                raise HTTPException(
+                    status_code=400,
+                    detail="That code is incorrect or has expired. Request a new code.",
+                )
+            user.email = email
+            email_changed = True
+
+        user.updated_at = datetime.utcnow()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="That contact is already used by another account.",
+            )
+        self.db.refresh(user)
+
+        try:
+            from core.auth.service.green_account_client import publish_user
+
+            publish_user(user)
+        except Exception as exc:
+            logger.warning(
+                "Green account publish after two-factor contact change failed for %s: %s",
+                user.id,
+                exc,
+            )
+
+        return self.two_factor_status(user), email_changed

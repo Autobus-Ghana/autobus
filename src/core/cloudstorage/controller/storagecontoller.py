@@ -42,7 +42,6 @@ from core.cloudstorage.service.storageservice import StorageService
 from core.cloudstorage.service.storageservice import StorageFolder
 from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
-from core.subscription.service.subscription_service import SubscriptionService
 from core.user.service.user_service import UserService
 from core.rag.rag_index_job_store import RagIndexJobStore
 from core.rag.rag_index_service import RagIndexService
@@ -77,16 +76,9 @@ def _safe_user_prefix(subject: str) -> str:
     return f"{safe}/"
 
 
-def _require_subscribed_user(db: Session, subject: str):
-    user_service = UserService(db)
-    user = user_service.get_current_user(subject)
-    sub = SubscriptionService(db).get_user_active_subscription(str(user.id))
-    if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Active subscription is required to index documents for RAG.",
-        )
-    return user
+def _require_user(db: Session, subject: str):
+    """Load the signed-in account. Indexing is billed with storage credits."""
+    return UserService(db).get_current_user(subject)
 
 
 def _user_data_from_user(user) -> dict:
@@ -188,13 +180,13 @@ async def upload_rag_document_for_subscribed_user(
     Upload a document to object storage and index extractable text into Qdrant for the
     authenticated user (tenant id `user:{internal_user_id}` by default).
 
-    Requires an active subscription. Supported extraction matches FileContentExtractor
-    (txt, pdf, docx, csv, xlsx).
+    Storage credits are charged for the upload. Supported extraction matches
+    FileContentExtractor (txt, pdf, docx, csv, xlsx).
 
     Use `async_mode=true` for progress monitoring via the rag-index-jobs endpoint.
     """
     subject = authjwt.get_jwt_subject()
-    user = _require_subscribed_user(db, subject)
+    user = _require_user(db, subject)
 
     raw = await file.read()
     if not raw:
@@ -261,10 +253,11 @@ async def upload_rag_url_for_subscribed_user(
     """
     Scrape a public website, store the extracted text, and index it into Qdrant.
 
+    Storage credits are charged from the scraped page size while the job runs.
     Returns immediately with a job_id. Poll GET /me/rag-index-jobs/{job_id} for progress.
     """
     subject = authjwt.get_jwt_subject()
-    user = _require_subscribed_user(db, subject)
+    user = _require_user(db, subject)
     url = str(body.url)
 
     job = rag_job_store.create_job(

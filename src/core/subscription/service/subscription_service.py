@@ -6,19 +6,6 @@ from core.subscription.model.user_subscription import UserSubscription, Subscrip
 from core.user.model.User import User
 import logging
 import json
-import os
-import uuid
-
-from core.socialmedia.model.PostizOrganization import PostizOrganization
-from core.socialmedia.service.postiz_api_service import PostizClient, postiz_enabled, derive_postiz_password
-from core.socialmedia.service.postiz_org_service import PostizOrgService
-from core.chatwoot.model.ChatwootAccount import ChatwootAccount
-from core.chatwoot.service.chatwoot_api_service import (
-    ChatwootClient,
-    chatwoot_enabled,
-    derive_chatwoot_password,
-)
-from utilities.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -138,116 +125,6 @@ class SubscriptionService:
             except Exception as e:
                 logger.warning(f"Credit initialization failed for user {user_id}: {e}")
 
-            # Optional: Provision Postiz organization on first paid subscription.
-            # If a mapping already exists, do nothing.
-            try:
-                if postiz_enabled():
-                    existing = PostizOrgService(self.db).get_for_user(user_id)
-                    if not existing:
-                        user = self.db.query(User).filter(User.id == user_id).first()
-                        if user and user.email:
-                            base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-                            company_name = (user.company or user.organization_workplace or user.fullname or "Autobus Client").strip()
-                            postiz_password = derive_postiz_password(username=user.fullname)
-                            client = PostizClient(base_url=base_url)
-
-                            import asyncio
-
-                            postiz_org_id, postiz_api_key = asyncio.run(
-                                client.provision_org_and_get_public_api_key(
-                                    email=user.email,
-                                    company=company_name,
-                                    password=postiz_password,
-                                )
-                            )
-
-                            mapping = PostizOrganization(
-                                id=f"po_{str(uuid.uuid4())[:12]}",
-                                user_id=user_id,
-                                postiz_org_id=postiz_org_id,
-                                postiz_public_api_key_encrypted=encrypt_secret(postiz_api_key) or postiz_api_key,
-                            )
-                            self.db.add(mapping)
-                            self.db.commit()
-            except Exception as e:
-                # Don't fail the subscription if Postiz is down/misconfigured.
-                self.db.rollback()
-                logger.warning(
-                    f"[POSTIZ] Provisioning skipped/failed on subscribe for user {user_id} "
-                    f"(POSTIZ_BASE_URL={os.getenv('POSTIZ_BASE_URL','').strip()!r}): {e}"
-                )
-
-            # Chatwoot tenant is provisioned here only (not at signup). If a mapping already exists, skip.
-            try:
-                base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
-                token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
-                if not chatwoot_enabled():
-                    logger.info(
-                        f"[CHATWOOT] Provisioning disabled on subscribe for user {user_id} "
-                        f"(CHATWOOT_BASE_URL={base_url!r}, CHATWOOT_PLATFORM_API_TOKEN={'set' if bool(token) else 'missing'})"
-                    )
-                else:
-                    existing_cw = (
-                        self.db.query(ChatwootAccount)
-                        .filter(ChatwootAccount.user_id == user_id)
-                        .first()
-                    )
-                    if existing_cw:
-                        logger.info(
-                            f"[CHATWOOT] Provisioning skipped on subscribe for user {user_id}: already provisioned"
-                        )
-                    else:
-                        user = self.db.query(User).filter(User.id == user_id).first()
-                        if not user:
-                            logger.info(
-                                f"[CHATWOOT] Provisioning skipped on subscribe for user {user_id}: user not found"
-                            )
-                        elif not user.email:
-                            logger.info(
-                                f"[CHATWOOT] Provisioning skipped on subscribe for user {user_id}: missing email"
-                            )
-                        else:
-                            account_name = (
-                                (user.company or user.organization_workplace or user.fullname or "Autobus Client")
-                                .strip()
-                            )
-                            chatwoot_password = derive_chatwoot_password(username=user.fullname)
-                            client = ChatwootClient(base_url=base_url, platform_api_token=token)
-
-                            import asyncio
-
-                            logger.info(
-                                f"[CHATWOOT] Provisioning tenant on subscribe for user {user_id} "
-                                f"(CHATWOOT_BASE_URL={base_url!r}, account_name={account_name!r})"
-                            )
-                            cw_account_id, cw_user_id, cw_access_token = asyncio.run(
-                                client.provision_account_and_user(
-                                    account_name=account_name,
-                                    email=user.email,
-                                    name=(user.fullname or user.email).strip(),
-                                    password=chatwoot_password,
-                                    support_email=user.email,
-                                )
-                            )
-
-                            mapping = ChatwootAccount(
-                                id=f"cw_{str(uuid.uuid4())[:12]}",
-                                user_id=user_id,
-                                chatwoot_account_id=int(cw_account_id),
-                                chatwoot_user_id=int(cw_user_id),
-                                chatwoot_user_access_token_encrypted=encrypt_secret(cw_access_token)
-                                or cw_access_token,
-                            )
-                            self.db.add(mapping)
-                            self.db.commit()
-            except Exception as e:
-                # Don't fail the subscription if Chatwoot is down/misconfigured.
-                self.db.rollback()
-                logger.warning(
-                    f"[CHATWOOT] Provisioning skipped/failed on subscribe for user {user_id} "
-                    f"(CHATWOOT_BASE_URL={os.getenv('CHATWOOT_BASE_URL','').strip()!r}): {e}"
-                )
-            
             # Initialize user agents based on any active subscription they may have
             try:
                 init_res = self.initialize_user_agents_from_subscription(user_id)

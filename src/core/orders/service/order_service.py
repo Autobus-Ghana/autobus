@@ -2,8 +2,9 @@
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
+import re
 import uuid
 import secrets
 import string
@@ -573,6 +574,18 @@ class OrderService:
         return str(order.user_id) == str(resolved)
 
     @staticmethod
+    def _customer_number_from_order_phone(phone_raw: str) -> Optional[str]:
+        """Fit an order phone (often a WhatsApp id) into customers.customer_number."""
+        local = convert_to_local_ghana_format(phone_raw) or ""
+        digits = re.sub(r"\D", "", local)
+        if digits:
+            if len(digits) > 20:
+                digits = digits[-20:]
+            return digits
+        compact = re.sub(r"\s+", "", phone_raw).strip()
+        return compact[:20] or None
+
+    @staticmethod
     def _usable_contact_value(value: Optional[str]) -> Optional[str]:
         text = (value or "").strip()
         if not text:
@@ -616,11 +629,16 @@ class OrderService:
             if not phone_raw:
                 return False, None, order, False, "This order has no customer phone number to save."
 
-            local_phone = convert_to_local_ghana_format(phone_raw) or phone_raw
-            name = self._usable_contact_value(order.customer_name) or "Customer"
+            local_phone = self._customer_number_from_order_phone(phone_raw)
+            if not local_phone:
+                return False, None, order, False, "This order has no customer phone number to save."
+
+            name = (self._usable_contact_value(order.customer_name) or "Customer")[:100]
             email = self._usable_contact_value(order.customer_email)
             if email and "@" not in email:
                 email = None
+            if email:
+                email = email[:255]
 
             customer = customer_service.find_customer_by_phone(resolved_user_id, local_phone)
             created = False
@@ -636,11 +654,14 @@ class OrderService:
                     name=name,
                     customer_number=local_phone,
                     email=email,
+                    allow_unknown_network=True,
                 )
                 if not success:
                     # Race / duplicate stored under a slightly different format.
                     customer = customer_service.find_customer_by_phone(resolved_user_id, local_phone)
                     if not customer:
+                        if (message or "").lower().startswith("error saving customer"):
+                            message = "Could not save this customer from the order. Check the phone number and try again."
                         return False, None, order, False, message
                 else:
                     created = True
@@ -649,7 +670,7 @@ class OrderService:
                 return False, None, order, False, "Could not save this customer from the order."
 
             order.customer_id = str(customer.id)
-            order.updated_at = datetime.utcnow()
+            order.updated_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(order)
 
@@ -669,5 +690,5 @@ class OrderService:
         except Exception as e:
             self.db.rollback()
             logger.error(f"[ORDER_SERVICE] Error saving customer from order: {str(e)}", exc_info=True)
-            return False, None, None, False, f"Error saving customer: {str(e)}"
+            return False, None, None, False, "Could not save this customer from the order. Check the phone number and try again."
 

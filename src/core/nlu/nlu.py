@@ -17,8 +17,6 @@ from sqlalchemy import or_
 from fastapi import HTTPException
 from core.auth.service.authservice import AuthService
 from core.nlu.config import INTENT_CATEGORIES, RESPONSE_TEMPLATES
-from core.chatwoot.model.ChatwootAccount import ChatwootAccount
-from core.chatwoot.service.chatwoot_api_service import ChatwootAccountClient
 from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
@@ -72,7 +70,6 @@ from core.user.model.User import User
 from utilities.uniqueidgenerator import UniqueIdGenerator
 from decimal import Decimal
 from core.customers.utility.network_detector import NetworkDetector
-from utilities.crypto import decrypt_secret
 from core.rag.conversation_vector_client import ConversationVectorClient
 from core.rag.sources import KNOWLEDGE_SOURCES
 from core.rag.tenant import resolve_effective_rag_tenant_id
@@ -2709,69 +2706,6 @@ class AutobusNLUSystem:
         # Do not write chat turns back into the knowledge index. Prior assistant
         # hallucinations were being retrieved as "facts" on later product questions.
         return msg
-
-    def _route_conversational_intent_to_chatwoot(
-        self,
-        *,
-        user_id: str,
-        user_message: str,
-        user_data: Optional[Dict[str, Any]],
-    ) -> Optional[str]:
-        """
-        If the Autobus user has a provisioned Chatwoot account, forward the message into Chatwoot.
-        Returns a response string if routed, else None (meaning: not provisioned, use internal fallback).
-        """
-        base_url = (os.getenv("CHATWOOT_BASE_URL") or "").strip()
-        if not base_url:
-            return None
-
-        db_user_id = (user_data or {}).get("db_user_id")
-        if not db_user_id:
-            return None
-
-        db = SessionLocal()
-        try:
-            mapping = db.query(ChatwootAccount).filter(ChatwootAccount.user_id == str(db_user_id)).first()
-            if not mapping:
-                return None
-
-            access_token = decrypt_secret(mapping.chatwoot_user_access_token_encrypted)
-            if not access_token:
-                return None
-
-            client = ChatwootAccountClient(
-                base_url=base_url,
-                account_id=int(mapping.chatwoot_account_id),
-                user_access_token=access_token,
-            )
-
-            inbox_id = client.get_or_create_api_inbox_id(preferred_name="Autobus API")
-
-            # Use stable identifier: Autobus internal user id (db pk)
-            contact_identifier = str(db_user_id)
-            contact_name = None
-            contact_email = (user_data or {}).get("email")
-            contact_phone = user_id
-
-            reply_timeout_s = float(os.getenv("CHATWOOT_SYNC_REPLY_TIMEOUT_S", "2.5") or "2.5")
-            reply = client.send_and_wait_for_reply(
-                inbox_id=inbox_id,
-                contact_identifier=contact_identifier,
-                contact_name=contact_name,
-                contact_email=contact_email,
-                contact_phone=contact_phone,
-                user_message=user_message,
-                reply_timeout_s=reply_timeout_s,
-            )
-
-            if reply:
-                return reply
-
-            # If no bot/agent replied synchronously, return an ack (message still delivered to Chatwoot).
-            return "Got it — I’ve sent this to support. You’ll get a reply shortly."
-        finally:
-            db.close()
-    
     def _process_user_management_intent(self, user_id: str, intent: str, slots: Dict) -> IntentHandlerResult:
         """Process user management intents (update profile, view profile, update username, update phone)"""
         db = SessionLocal()

@@ -6,7 +6,6 @@ import asyncio
 import base64
 import io
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -21,6 +20,7 @@ from core.user.model.User import User
 
 from core.intelligence.service.owner_agent_destinations import (
     AUTOBUS_IG_PREFIX,
+    MARKETING_POST_IDENTIFIERS,
     SKIP_POSTIZ_IDENTIFIERS,
     VIDEO_ONLY_PROVIDERS,
     build_postiz_payload,
@@ -191,7 +191,7 @@ def list_social_destinations(db: Session, user: User) -> List[Dict[str, Any]]:
         iid = str(
             row.get("id") or row.get("integrationId") or row.get("integration_id") or ""
         ).strip()
-        if not iid or ident in SKIP_POSTIZ_IDENTIFIERS:
+        if not iid or ident in SKIP_POSTIZ_IDENTIFIERS or ident not in MARKETING_POST_IDENTIFIERS:
             continue
         if row.get("disabled") is True:
             continue
@@ -201,7 +201,7 @@ def list_social_destinations(db: Session, user: User) -> List[Dict[str, Any]]:
             {
                 "id": iid,
                 "provider": ident,
-                "channel": "postiz",
+                "channel": "postiz" if ident in {"tiktok", "youtube"} else "zernio",
                 "label": f"{label} ({name})" if name and name.lower() != ident else label,
                 "publishing_enabled": True,
             }
@@ -234,30 +234,11 @@ def resolve_destinations(
 
 
 def fetch_postiz_integrations(db: Session, user: User) -> List[Dict[str, Any]]:
-    from core.socialmedia.service.postiz_api_service import (
-        PostizAPIError,
-        PostizClient,
-        normalize_postiz_integrations_list,
-        postiz_enabled,
-    )
-    from core.socialmedia.service.postiz_org_service import PostizOrgService
+    from core.socialmedia.service.postiz_native import list_native_integrations
+    from core.socialmedia.service.zernio_service import posting_integrations
 
-    if not postiz_enabled():
-        return []
-    api_key = PostizOrgService(db).get_public_api_key_for_user(user.id) or (
-        os.getenv("POSTIZ_PUBLIC_API_KEY", "").strip()
-        or os.getenv("POSTIZ_GLOBAL_PUBLIC_API_KEY", "").strip()
-        or None
-    )
-    base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-    if not api_key or not base_url:
-        return []
     try:
-        raw = _await(PostizClient(base_url).list_integrations(api_key))
-        return normalize_postiz_integrations_list(raw)
-    except PostizAPIError as exc:
-        logger.warning("[OWNER_AGENT] Postiz list integrations failed: %s", exc)
-        return []
+        return posting_integrations(db, user.id) + list_native_integrations(user.id, db)
     except Exception:
-        logger.exception("[OWNER_AGENT] Postiz list integrations failed")
+        logger.exception("[OWNER_AGENT] Could not list connected social accounts")
         return []

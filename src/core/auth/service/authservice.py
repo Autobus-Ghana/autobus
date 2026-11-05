@@ -586,7 +586,13 @@ class AuthService:
         phone = getattr(request, "phone", None)
 
         if email:
-            db_user = self.db.query(User).filter(User.email == email).first()
+            # Sign-in already matches email case-insensitively. Reset must too,
+            # or "User@gmail.com" misses a stored "user@gmail.com" and the app
+            # only shows a generic failure. Phone lookup is exact and unaffected.
+            normalized_email = str(email).strip().lower()
+            db_user = self.db.query(User).filter(
+                func.lower(User.email) == normalized_email
+            ).first()
             not_found_detail = "No account found with this email"
         elif phone:
             db_user = self.db.query(User).filter(User.phone == phone).first()
@@ -697,7 +703,10 @@ class AuthService:
                 )
 
             if email:
-                db_user = self.db.query(User).filter(User.email == email).first()
+                normalized_email = str(email).strip().lower()
+                db_user = self.db.query(User).filter(
+                    func.lower(User.email) == normalized_email
+                ).first()
             else:
                 db_user = self.db.query(User).filter(User.phone == phone).first()
 

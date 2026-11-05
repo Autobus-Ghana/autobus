@@ -13,6 +13,7 @@ import ssl
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from core.otp.model.otp import OTP
 from core.otp.dto.response.otp_send_response import OTPSendResponse
@@ -130,11 +131,14 @@ class OTPService:
         `body_template` may include `{otp}` and `{seconds}` placeholders.
         """
         try:
+            email = self.normalize_email(email)
             otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_EXPIRE_SECONDS)
             
-            # Delete any existing OTP for this email
-            self.db.query(OTP).filter(OTP.email == email).delete()
+            # Delete any existing OTP for this email, including different casing.
+            self.db.query(OTP).filter(func.lower(OTP.email) == email).delete(
+                synchronize_session=False
+            )
             
             # Create new OTP record (store hash only)
             otp_record = OTP(
@@ -330,6 +334,11 @@ class OTPService:
         except Exception as exc:
             return f"SMTP send failed: {exc}"
 
+    @staticmethod
+    def normalize_email(email: Optional[str]) -> str:
+        """Canonical form for OTP storage and lookup. Mailboxes are case-insensitive."""
+        return (email or "").strip().lower()
+
     def validate_otp(
         self,
         phone: Optional[str] = None,
@@ -346,11 +355,11 @@ class OTPService:
             if phone:
                 query = query.filter(OTP.phone == phone)
             elif email:
-                query = query.filter(OTP.email == email)
+                query = query.filter(func.lower(OTP.email) == self.normalize_email(email))
             else:
                 return False
 
-            otp_record = query.first()
+            otp_record = query.order_by(OTP.created_at.desc()).first()
             if not otp_record:
                 return False
 

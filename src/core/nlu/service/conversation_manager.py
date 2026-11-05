@@ -1,11 +1,14 @@
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, fields
+import logging
 import uuid
 
 from utilities.dbconfig import SessionLocal
 
 from core.nlu.model.Conversation import DailyConversation
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,25 +110,26 @@ class ConversationManager:
         The inbox API and the message worker do not share memory. Without this
         refresh, a cached session keeps ``intervention_active`` false and the
         assistant still replies after the owner flags the chat.
-        """
-        state = self.memory_cache.get(user_id)
-        if state is None:
-            return bool(self.get_conversation_state(user_id).intervention_active)
 
+        A session the agent already marked completed is not a takeover. Holding
+        that row in cache would append the customer's next message to the old
+        history and put Mark as complete back on Live Chat.
+        """
+        state = self.get_conversation_state(user_id)
         session_id = state.session_db_id
         if not session_id:
             return bool(state.intervention_active)
 
-        self.db.expire_all()
-        row = (
-            self.db.query(DailyConversation)
-            .filter(DailyConversation.id == int(session_id))
-            .first()
-        )
+        row = self._fetch_session_row(session_id)
         if not row:
             return bool(state.intervention_active)
 
         raw = row.conversation_state or {}
+        if self._payload_is_completed(raw):
+            self._forget_cached_session(user_id)
+            fresh = self.get_conversation_state(user_id)
+            return bool(fresh.intervention_active)
+
         if raw.get("intervention_active"):
             state.intervention_active = True
             state.intervention_id = raw.get("intervention_id")
@@ -136,8 +140,22 @@ class ConversationManager:
 
     def get_conversation_state(self, user_id: str) -> ConversationState:
         """Return the user's current (non-completed) conversation session, or start a new one."""
-        if user_id in self.memory_cache:
-            return self.memory_cache[user_id]
+        cached = self.memory_cache.get(user_id)
+        if cached is not None and not self._cached_session_is_closed(cached):
+            return cached
+        carried_identity = None
+        if cached is not None:
+            logger.info(
+                "[CONVERSATION] Completed session %s for %s is closed; starting a new chat",
+                cached.session_db_id,
+                user_id,
+            )
+            carried_identity = (
+                cached.customer_username,
+                cached.customer_phone,
+                cached.customer_display_name,
+            )
+            self._forget_cached_session(user_id)
 
         loaded = self._load_active_session_from_db(user_id)
         if loaded:
@@ -145,10 +163,44 @@ class ConversationManager:
             return loaded
 
         state = ConversationState(user_id=user_id, conversation_date=date.today())
+        if carried_identity:
+            state.customer_username, state.customer_phone, state.customer_display_name = carried_identity
         self.memory_cache[user_id] = state
         return state
 
+    def _forget_cached_session(self, user_id: str) -> None:
+        self.memory_cache.pop(user_id, None)
+
+    @staticmethod
+    def _payload_is_completed(raw: Optional[Dict]) -> bool:
+        return str((raw or {}).get("conversation_lifecycle") or "").lower() == "completed"
+
+    def _fetch_session_row(self, session_id: int):
+        """Reload one session from the database, ignoring this process's stale copy.
+
+        The inbox request that marks a chat complete uses a different DB session
+        than the message worker. Without a refresh, the worker still sees the
+        pre-completion JSON and treats the closed chat as live.
+        """
+        self.db.expire_all()
+        return (
+            self.db.query(DailyConversation)
+            .filter(DailyConversation.id == int(session_id))
+            .first()
+        )
+
+    def _cached_session_is_closed(self, state: ConversationState) -> bool:
+        if self._payload_is_completed({"conversation_lifecycle": state.conversation_lifecycle}):
+            return True
+        if not state.session_db_id:
+            return False
+        row = self._fetch_session_row(state.session_db_id)
+        if not row:
+            return False
+        return self._payload_is_completed(row.conversation_state)
+
     def _load_active_session_from_db(self, user_id: str) -> Optional[ConversationState]:
+        self.db.expire_all()
         rows = (
             self.db.query(DailyConversation)
             .filter(DailyConversation.user_id == user_id)
@@ -158,15 +210,15 @@ class ConversationManager:
         )
         for row in rows:
             raw = row.conversation_state or {}
-            lifecycle = raw.get("conversation_lifecycle", "active")
-            if lifecycle != "completed":
-                merged = dict(raw)
-                if not merged.get("conversation_id"):
-                    merged["conversation_id"] = f"migrated-{row.id}"
-                merged["session_db_id"] = row.id
-                st = ConversationState.from_dict(merged)
-                st.session_db_id = row.id
-                return st
+            if self._payload_is_completed(raw):
+                continue
+            merged = dict(raw)
+            if not merged.get("conversation_id"):
+                merged["conversation_id"] = f"migrated-{row.id}"
+            merged["session_db_id"] = row.id
+            st = ConversationState.from_dict(merged)
+            st.session_db_id = row.id
+            return st
         return None
 
     def persist(self, user_id: str) -> None:
@@ -228,6 +280,19 @@ class ConversationManager:
 
     def _save_conversation_state(self, state: ConversationState):
         payload = state.to_dict()
+        if state.session_db_id and not self._payload_is_completed(payload):
+            closed = self._fetch_session_row(state.session_db_id)
+            if closed and self._payload_is_completed(closed.conversation_state):
+                logger.info(
+                    "[CONVERSATION] Refusing to reopen completed session %s for %s",
+                    state.session_db_id,
+                    state.user_id,
+                )
+                state.session_db_id = None
+                if self.memory_cache.get(state.user_id) is state:
+                    self._forget_cached_session(state.user_id)
+                return
+
         if state.session_db_id:
             row = (
                 self.db.query(DailyConversation)

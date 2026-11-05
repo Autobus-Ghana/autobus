@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 AUTOBUS_IG_PREFIX = "autobus-ig-"
-SKIP_POSTIZ_IDENTIFIERS = frozenset({"whatsapp", "facebook"})
+SKIP_POSTIZ_IDENTIFIERS = frozenset({"whatsapp"})
+MARKETING_POST_IDENTIFIERS = frozenset(
+    {"youtube", "tiktok", "facebook", "twitter", "x", "snapchat"}
+)
 VIDEO_ONLY_PROVIDERS = frozenset({"youtube", "tiktok"})
 PLATFORM_ALIASES = {
     "instagram": {"instagram", "instagram-standalone"},
@@ -14,6 +17,8 @@ PLATFORM_ALIASES = {
     "youtube": {"youtube"},
     "yt": {"youtube"},
     "tiktok": {"tiktok"},
+    "facebook": {"facebook"},
+    "snapchat": {"snapchat"},
     "x": {"x", "twitter"},
     "twitter": {"x", "twitter"},
 }
@@ -51,6 +56,8 @@ def provider_label(identifier: str) -> str:
         "tiktok": "TikTok",
         "x": "X",
         "twitter": "X",
+        "facebook": "Facebook",
+        "snapchat": "Snapchat",
     }.get(ident, ident.replace("-", " ").title() or "Social")
 
 
@@ -65,6 +72,13 @@ def match_destinations(
     rows = list(destinations or [])
     if instagram_only:
         rows = [d for d in rows if d.get("channel") == "autobus_instagram"]
+    elif not account_ids and not platforms:
+        rows = [
+            d
+            for d in rows
+            if d.get("channel") != "autobus_instagram"
+            and str(d.get("provider") or "").lower() not in {"instagram", "instagram-standalone"}
+        ]
     wanted_ids = {normalize_destination_id(value) for value in (account_ids or []) if value}
     wanted_platforms = set()
     for raw in platforms or []:
@@ -120,7 +134,7 @@ def postiz_settings_for(identifier: str, title_fallback: str) -> Dict[str, Any]:
             "is_trial_reel": False,
             "collaborators": [],
         }
-    if ident == "x":
+    if ident in {"x", "twitter"}:
         return {"__type": "x", "who_can_reply_post": "everyone", "community": ""}
     if ident == "youtube":
         return {

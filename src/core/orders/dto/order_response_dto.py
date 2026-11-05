@@ -108,6 +108,10 @@ class OrderResponseDTO(BaseModel):
             item_name = order.order_items.get("name")
             quantity = order.order_items.get("quantity")
 
+        quantity = _as_int(quantity)
+        if quantity is None:
+            quantity = _as_int(getattr(order, "total_quantity", None))
+
         return cls(
             order_id=str(order.order_id),
             order_number=order.order_number,
@@ -117,29 +121,57 @@ class OrderResponseDTO(BaseModel):
             customer_phone=order.customer_phone,
             customer_email=order.customer_email,
             customer_location=order.customer_location,
-            order_type=order.order_type.value if hasattr(order.order_type, 'value') else order.order_type,
+            order_type=_enum_text(order.order_type) or "sale",
             item_name=item_name,
-            quantity=quantity if quantity is not None else order.total_quantity,
-            order_status=order.order_status.value if hasattr(order.order_status, 'value') else order.order_status,
-            payment_status=order.payment_status.value if hasattr(order.payment_status, 'value') else order.payment_status,
-            fulfillment_status=order.fulfillment_status.value if hasattr(order.fulfillment_status, 'value') else order.fulfillment_status,
-            subtotal_amount=order.subtotal_amount,
-            discount_amount=order.discount_amount,
-            tax_amount=order.tax_amount,
-            shipping_amount=order.shipping_amount,
-            total_amount=order.total_amount,
-            currency_code=order.currency_code,
-            payment_method=order.payment_method.value if order.payment_method and hasattr(order.payment_method, 'value') else order.payment_method,
+            quantity=quantity,
+            order_status=_enum_text(order.order_status) or "pending",
+            payment_status=_enum_text(order.payment_status) or "pending",
+            fulfillment_status=_enum_text(order.fulfillment_status) or "unfulfilled",
+            subtotal_amount=_money(order.subtotal_amount),
+            discount_amount=_money(order.discount_amount),
+            tax_amount=_money(order.tax_amount),
+            shipping_amount=_money(order.shipping_amount),
+            total_amount=_money(order.total_amount),
+            currency_code=order.currency_code or "GHS",
+            payment_method=_enum_text(order.payment_method),
             payment_reference=order.payment_reference,
-            payment_details=order.payment_details,
-            order_date=order.order_date,
+            payment_details=order.payment_details if isinstance(order.payment_details, dict) else None,
+            order_date=order.order_date or order.created_at or datetime.utcnow(),
             payment_date=order.payment_date,
             fulfillment_date=order.fulfillment_date,
             delivery_date=order.delivery_date,
-            created_at=order.created_at,
-            updated_at=order.updated_at,
-            order_source=order.order_source.value if order.order_source and hasattr(order.order_source, 'value') else order.order_source,
+            created_at=order.created_at or order.order_date or datetime.utcnow(),
+            updated_at=order.updated_at or order.created_at or order.order_date or datetime.utcnow(),
+            order_source=_enum_text(order.order_source),
             notes=order.notes,
-            tags=order.tags,
-            custom_metadata=order.custom_metadata
+            tags=[str(tag) for tag in order.tags] if isinstance(order.tags, list) else None,
+            custom_metadata=order.custom_metadata if isinstance(order.custom_metadata, dict) else None,
         )
+
+
+def _enum_text(value):
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        return value.value
+    text = str(value).strip()
+    return text or None
+
+
+def _money(value):
+    return 0 if value is None else value
+
+
+def _as_int(value):
+    """Coerce JSON quantities (including 2.0) into an int for the response model."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None

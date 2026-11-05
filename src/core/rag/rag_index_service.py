@@ -23,6 +23,39 @@ from core.rag.website_content_extractor import (
 logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[[RagIndexJobStatus, int, str], None]
+_CREDIT_SHORTAGE = (
+    "You don't have enough credits for this. Buy more credits to continue."
+)
+
+
+def _charge_storage_credits(user_id: str, raw: bytes, operation: str) -> None:
+    """Deduct storage credits for bytes that will be saved. Raises ValueError."""
+    from fastapi import HTTPException
+
+    from core.credits.model.credit_types import CreditType
+    from core.credits.service.credit_service import CreditService
+    from utilities.dbconfig import SessionLocal
+
+    size_mb = max(0.01, len(raw) / (1024 * 1024))
+    db = SessionLocal()
+    try:
+        CreditService(db).require_credits(
+            str(user_id),
+            CreditType.STORAGE_MB.value,
+            size_mb,
+            operation,
+        )
+    except HTTPException as exc:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            message = str(detail.get("message") or _CREDIT_SHORTAGE)
+        else:
+            message = str(detail or _CREDIT_SHORTAGE)
+        if len(message) > 180 or "credit" not in message.lower():
+            message = _CREDIT_SHORTAGE
+        raise ValueError(message) from exc
+    finally:
+        db.close()
 
 
 def _safe_user_prefix(subject: str) -> str:
@@ -102,9 +135,15 @@ class RagIndexService:
             report(RagIndexJobStatus.scraping, 15, "Fetching page content")
             extracted = await WebsiteContentExtractor.fetch_text(url)
             safe_name = filename_from_url(url)
+            raw = extracted.encode("utf-8")
+
+            report(RagIndexJobStatus.validating, 25, "Checking storage credits")
+            user_id = user_data.get("db_user_id")
+            if not user_id:
+                raise ValueError("Could not resolve the account for this upload")
+            _charge_storage_credits(str(user_id), raw, "rag_url")
 
             report(RagIndexJobStatus.uploading, 30, "Saving scraped content")
-            raw = extracted.encode("utf-8")
             result = self._index_file_bytes(
                 subject=subject,
                 user_data=user_data,

@@ -874,3 +874,37 @@ def _posts_for_integration(payload: Any, integration_id: str) -> List[Dict[str, 
         reverse=True,
     )
     return matched
+
+
+def coerce_tiktok_privacy_for_unaudited_app(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Unaudited TikTok apps reject Direct Post with PUBLIC_TO_EVERYONE.
+    Set TIKTOK_ALLOW_PUBLIC_POST=true after TikTok audits public posting.
+    """
+    if os.getenv("TIKTOK_ALLOW_PUBLIC_POST", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return payload
+    posts = payload.get("posts")
+    if not isinstance(posts, list):
+        return payload
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        settings = post.get("settings")
+        if not isinstance(settings, dict):
+            continue
+        if str(settings.get("__type") or "").strip().lower() != "tiktok":
+            continue
+        privacy = str(settings.get("privacy_level") or "").strip()
+        if privacy in {"", "SELF_ONLY"}:
+            continue
+        logger.warning(
+            "[SOCIAL] TikTok privacy %s is not allowed until the app is "
+            "audited for public Direct Post; using SELF_ONLY",
+            privacy,
+        )
+        settings["privacy_level"] = "SELF_ONLY"
+    return payload

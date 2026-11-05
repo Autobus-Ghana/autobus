@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
+from utilities.auth_subject import resolve_internal_user_id
 from core.instagram.model.InstagramAccount import InstagramAccount
 from core.instagram.service.instagram_oauth_service import (
     InstagramOAuthService,

@@ -37,7 +37,7 @@ These nodes are in the palette under **Autobus modules**. Each one calls the liv
 | Business intelligence | Answers a question from the merchant’s profile, products, orders, inbox, and uploaded knowledge | `answer` |
 | Customer service | Drafts a reply with the same agent that handles inbox and WhatsApp chats | `reply` |
 | Create marketing content | Writes a caption or campaign. It does not publish | `content` |
-| Post to connected accounts | Publishes that caption to Postiz accounts you name | `postiz` |
+| Post to connected accounts | Publishes that caption to the connected accounts you name | `publish` |
 
 Chain them when the brief needs more than one. A typical marketing workflow is:
 

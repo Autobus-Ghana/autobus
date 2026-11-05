@@ -36,8 +36,6 @@ from core.whatsapp.controller.whatsapp_controller import (
 )
 from core.instagram.controller.instagram_controller import instagram_routes
 from core.sms_sender_id.controller.sms_sender_id_controller import sms_sender_id_routes
-from core.chatwoot.controller.chatwoot_controller import chatwoot_routes
-from core.integrations.controller.integration_test_controller import integration_routes
 from core.product.controller.product_controller import product_routes
 from core.orders.controller.order_controller import order_routes
 from core.interventions.controller.intervention_controller import intervention_routes
@@ -395,8 +393,6 @@ app.include_router(instagram_routes, prefix="/api/v1/instagram", tags=["Instagra
 # https://useautobus.com/api/social/callback
 app.include_router(meta_whatsapp_callback_routes, prefix="/api", tags=["WhatsApp Meta Callback"])
 app.include_router(sms_sender_id_routes, prefix="/api/v1/sms-sender-ids", tags=["SMS Sender ID"])
-app.include_router(chatwoot_routes, prefix="/api/v1/chatwoot", tags=["Chatwoot Routes"])
-app.include_router(integration_routes, prefix="/api/v1/integrations", tags=["Integrations (self-test)"])
 app.include_router(product_routes, prefix="/api/v1/products", tags=["Product Routes"])
 app.include_router(order_routes, prefix="/api/v1/orders", tags=["Order Routes"])
 app.include_router(intervention_routes, prefix="/api/v1/interventions", tags=["Interventions Routes"])

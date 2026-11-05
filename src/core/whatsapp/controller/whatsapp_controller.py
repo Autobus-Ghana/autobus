@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
+from utilities.auth_subject import resolve_internal_user_id
 from core.socialmedia.service.zernio_client import ZernioAPIError
 from core.socialmedia.service.zernio_service import (
     connect_authorization,
@@ -287,7 +287,7 @@ def _embedded_signup_launch_html(
 
     Do not send the user to the Facebook OAuth dialog. That dialog requires
     redirect_uri to be listed under Valid OAuth Redirect URIs, and this app
-    only whitelists the Postiz Facebook callback. Embedded Signup uses
+    only whitelists the configured Facebook callback. Embedded Signup uses
     FB.login with config_id on the JavaScript SDK domain instead.
     """
     app_id_js = json.dumps(app_id)

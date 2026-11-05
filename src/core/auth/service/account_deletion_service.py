@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, List, Optional, Type
 
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import HTTPException, status
@@ -22,23 +21,12 @@ from core.auth.dto.response.account_deletion import (
 )
 from core.auth.service.authservice import AuthService
 from core.chatwoot.model.ChatwootAccount import ChatwootAccount
-from core.chatwoot.service.chatwoot_api_service import (
-    ChatwootAPIError,
-    ChatwootClient,
-    chatwoot_enabled,
-)
 from core.customers.model.customer import Customer
 from core.instagram.model.InstagramAccount import InstagramAccount
 from core.orders.model.order import Order
 from core.product.model.product import Product
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.socialmedia.model.SocialAccount import SocialAccount
-from core.socialmedia.service.postiz_api_service import (
-    PostizAPIError,
-    PostizClient,
-    normalize_postiz_integrations_list,
-)
-from core.socialmedia.service.postiz_org_service import PostizOrgService
 from core.subscription.model.user_subscription import SubscriptionStatus, UserSubscription
 from core.subscription.service.subscription_service import SubscriptionService
 from core.user.model.User import User, UserStatus
@@ -230,22 +218,6 @@ class AccountDeletionService:
                     detail=row.account_name,
                 )
             )
-        if self.db.query(ChatwootAccount).filter(ChatwootAccount.user_id == user.id).first():
-            items.append(
-                DeletionConnection(
-                    kind="chatwoot",
-                    label="Chat inbox",
-                    detail="Chatwoot workspace",
-                )
-            )
-        if self.db.query(PostizOrganization).filter(PostizOrganization.user_id == user.id).first():
-            items.append(
-                DeletionConnection(
-                    kind="postiz",
-                    label="Social publishing",
-                    detail="Connected outlets (YouTube, TikTok, and others)",
-                )
-            )
         return items
 
     async def delete_account(
@@ -288,8 +260,6 @@ class AccountDeletionService:
 
     async def _best_effort_remote_unlink(self, user: User) -> None:
         await self._unlink_instagram(user.id)
-        await self._unlink_postiz(user.id)
-        await self._unlink_chatwoot(user.id)
 
     async def _unlink_instagram(self, user_id: str) -> None:
         rows = (
@@ -311,49 +281,6 @@ class AccountDeletionService:
                     logger.warning("[IG] unsubscribe on account delete failed: %s", exc)
         except Exception as exc:
             logger.warning("[IG] oauth service unavailable during delete: %s", exc)
-
-    async def _unlink_postiz(self, user_id: str) -> None:
-        postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-        api_key = PostizOrgService(self.db).get_public_api_key_for_user(user_id)
-        if not postiz_base_url or not api_key:
-            return
-        try:
-            client = PostizClient(postiz_base_url)
-            raw = await client.list_integrations(api_key, timeout_s=8.0)
-            for item in normalize_postiz_integrations_list(raw):
-                iid = _integration_id(item)
-                if not iid:
-                    continue
-                try:
-                    await client.delete_integration(api_key, iid, timeout_s=10.0)
-                except PostizAPIError as exc:
-                    logger.warning("[SOCIAL] Postiz unlink %s failed: %s", iid, exc)
-        except Exception as exc:
-            logger.warning("[SOCIAL] Postiz cleanup on delete failed: %s", exc)
-
-    async def _unlink_chatwoot(self, user_id: str) -> None:
-        row = (
-            self.db.query(ChatwootAccount)
-            .filter(ChatwootAccount.user_id == user_id)
-            .first()
-        )
-        if not row or not chatwoot_enabled():
-            return
-        try:
-            client = ChatwootClient(
-                base_url=os.getenv("CHATWOOT_BASE_URL", "").strip(),
-                platform_api_token=os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip(),
-            )
-            try:
-                await client.delete_account(row.chatwoot_account_id)
-            except ChatwootAPIError as exc:
-                logger.warning("[CHATWOOT] delete account failed: %s", exc)
-            try:
-                await client.delete_user(row.chatwoot_user_id)
-            except ChatwootAPIError as exc:
-                logger.warning("[CHATWOOT] delete user failed: %s", exc)
-        except Exception as exc:
-            logger.warning("[CHATWOOT] cleanup on delete failed: %s", exc)
 
     def _wipe_workspace(self, user: User) -> None:
         user_id = user.id
@@ -486,7 +413,3 @@ class AccountDeletionService:
         except Exception as exc:
             logger.warning("Could not cancel subscriptions for %s: %s", user_id, exc)
 
-
-def _integration_id(item: Dict[str, Any]) -> str:
-    raw = item.get("id") or item.get("integrationId") or item.get("integration_id") or ""
-    return str(raw).strip()

@@ -47,18 +47,22 @@ class CustomerResponse(BaseModel):
             account_type_value = account_type_value.value
         elif isinstance(account_type_value, str):
             account_type_value = account_type_value.lower()
+        else:
+            account_type_value = str(account_type_value or "mobile_money")
 
+        created_at = customer.created_at or datetime.now()
+        updated_at = customer.updated_at or created_at
         return cls(
             id=customer.id,
-            name=customer.name,
+            name=customer.name or "Customer",
             email=customer.email,
             customer_number=customer.customer_number,
-            network=customer.network,
+            network=str(customer.network or ""),
             bank_code=customer.bank_code,
-            account_type=account_type_value,
-            is_active=customer.is_active,
-            created_at=customer.created_at,
-            updated_at=customer.updated_at
+            account_type=str(account_type_value),
+            is_active=bool(customer.is_active),
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
 

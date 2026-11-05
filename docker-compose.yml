@@ -203,31 +203,10 @@ services:
       CONTABO_BUCKET: ${CONTABO_BUCKET:-autobus}
       CONTABO_ENDPOINT: ${CONTABO_ENDPOINT:-https://usc1.contabostorage.com}
 
-      # Postiz (self-hosted) integration
-      # If Autobus shares a Docker network with Postiz, prefer service DNS:
-      #   POSTIZ_BASE_URL=http://postiz:5000
-      # If NOT sharing a Docker network, use host-mapped port (Docker Desktop):
-      #   POSTIZ_BASE_URL=http://host.docker.internal:4007
-      POSTIZ_BASE_URL: ${POSTIZ_BASE_URL:-http://postiz:5000}
-      # Browser-facing Postiz URL used in authorization links.
-      POSTIZ_PUBLIC_URL: ${POSTIZ_PUBLIC_URL:-https://postiz.useautobus.com}
-      # Optional. Lets Autobus query TikTok creator_info with the stored Postiz token.
-      POSTIZ_DATABASE_URL: ${POSTIZ_DATABASE_URL:-postgresql://postiz-user:postiz-password@postiz-postgres:5432/postiz-db-local}
-      # Same TikTok app as Postiz. Used to refresh an expired access token before creator_info.
       TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID:-}
       TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
-      # Postiz/Chatwoot LOCAL login: email + Autobus username (fullname), not the Autobus password.
-      # When true, enables POST /api/v1/integrations/provision-self-test (destructive upstream).
-      INTEGRATIONS_SELF_TEST_ENABLED: ${INTEGRATIONS_SELF_TEST_ENABLED:-false}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
 
-      # Chatwoot (self-hosted) integration (optional)
-      # If shared network: CHATWOOT_BASE_URL=http://chatwoot_rails:3000
-      # If not shared network (Docker Desktop): CHATWOOT_BASE_URL=http://host.docker.internal:3000
-      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-http://chatwoot_rails:3000}
-      CHATWOOT_PLATFORM_API_TOKEN: ${CHATWOOT_PLATFORM_API_TOKEN:-}
-      # Browser-facing Chatwoot URL for login / inbox setup links (falls back to CHATWOOT_BASE_URL in code if unset).
-      CHATWOOT_PUBLIC_URL: ${CHATWOOT_PUBLIC_URL:-https://chatwoot.useautobus.com}
       # Optional: public origin of this API for Meta crawlers (Instagram publish) and webhook hints.
       AUTOBUS_PUBLIC_API_URL: ${AUTOBUS_PUBLIC_API_URL:-https://api.useautobus.com}
 
@@ -241,7 +220,7 @@ services:
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_APP_ID: ${META_APP_ID:-2213025492844421}
       META_WHATSAPP_CONFIG_ID: ${META_WHATSAPP_CONFIG_ID:-1090469396641282}
-      # Facebook Login for Business config for Postiz Page publishing (Digital Marketing).
+      # Facebook Login for Business config for Page publishing.
       # Separate from META_WHATSAPP_CONFIG_ID (Embedded Signup).
       FACEBOOK_LOGIN_CONFIG_ID: ${FACEBOOK_LOGIN_CONFIG_ID:-2028376651182078}
       META_WHATSAPP_REDIRECT_URI: ${META_WHATSAPP_REDIRECT_URI:-https://useautobus.com/api/social/callback}
@@ -288,7 +267,7 @@ services:
         condition: service_healthy
     networks:
       - autobus_network
-      # Shared platform network (Caddy, Postiz, Chatwoot, RAG API)
+      # Shared platform network (Caddy, RAG API)
       - caddy
       # RAG internal network (Qdrant, TEI, rag-api)
       - greenbrain_rag

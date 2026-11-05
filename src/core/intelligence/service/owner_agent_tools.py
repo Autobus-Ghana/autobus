@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Dict, List
 
 from fastapi import HTTPException
@@ -447,13 +446,10 @@ def _publish_to_destinations(
         save_campaign,
     )
     from core.socialmedia.service.instagram_media_prepare import InstagramMediaPrepareError, InstagramMediaPrepareService
-    from core.socialmedia.service.postiz_api_service import (
-        PostizAPIError,
-        PostizClient,
-        coerce_tiktok_privacy_for_unaudited_app,
-        postiz_enabled,
-    )
-    from core.socialmedia.service.postiz_org_service import PostizOrgService
+    from core.socialmedia.service.postiz_api_service import PostizAPIError
+    from core.socialmedia.service.postiz_native import publish_marketing_posts
+    from core.socialmedia.service.tiktok_direct_post import coerce_tiktok_privacy_for_unaudited_app
+    from core.socialmedia.service.zernio_client import ZernioAPIError
 
     payload = fill_publish_args(user, args, db=db, instagram_only=instagram_only)
     urls = list(payload.get("media_urls") or [])
@@ -466,22 +462,22 @@ def _publish_to_destinations(
     if not dests:
         if instagram_only:
             return json.loads(
-                _err("No Instagram account is linked. Connect Instagram under Marketing → Manage Outlets.")
+                _err("No Instagram account is linked. Connect Instagram from Inbox.")
             )
         if media_looks_like_video(urls):
             return json.loads(
-                _err("No social accounts are linked. Connect Instagram, YouTube, or TikTok under Marketing → Manage Outlets.")
+                _err("No social accounts are linked. Connect YouTube, TikTok, Facebook, X, or Snapchat under Marketing.")
             )
         return json.loads(
             _err(
-                "No linked accounts can take this image. Connect Instagram, or generate a video for YouTube and TikTok."
+                "No linked accounts can take this image. Connect Facebook, X, or Snapchat, or generate a video for YouTube and TikTok."
             )
         )
 
     published: List[str] = []
     errors: List[str] = []
     ig_dests = [d for d in dests if d.get("channel") == "autobus_instagram"]
-    postiz_dests = [d for d in dests if d.get("channel") == "postiz"]
+    social_dests = [d for d in dests if d.get("channel") in {"zernio", "postiz"}]
     has_video = media_looks_like_video(urls)
 
     for dest in ig_dests:
@@ -501,40 +497,31 @@ def _publish_to_destinations(
         except Exception as exc:
             errors.append(f"{dest.get('label') or 'Instagram'}: {exc}")
 
-    ready_postiz: List[Dict[str, Any]] = []
-    for dest in postiz_dests:
+    ready_social: List[Dict[str, Any]] = []
+    for dest in social_dests:
         provider = str(dest.get("provider") or "").strip().lower()
         if provider in VIDEO_ONLY_PROVIDERS and not has_video:
             errors.append(f"{dest.get('label') or provider}: needs a video")
             continue
-        ready_postiz.append(dest)
+        ready_social.append(dest)
 
-    if ready_postiz:
-        api_key = PostizOrgService(db).get_public_api_key_for_user(user.id) or (
-            os.getenv("POSTIZ_PUBLIC_API_KEY", "").strip()
-            or os.getenv("POSTIZ_GLOBAL_PUBLIC_API_KEY", "").strip()
-            or None
-        )
-        base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-        if not postiz_enabled() or not api_key or not base_url:
-            errors.append("YouTube/TikTok posting is not configured for this business.")
-        else:
-            try:
-                postiz_payload = coerce_tiktok_privacy_for_unaudited_app(
-                    build_postiz_payload(ready_postiz, caption=caption, media_urls=list(urls))
-                )
-                postiz_payload = InstagramMediaPrepareService().prepare_postiz_payload(
-                    postiz_payload
-                )
-                run_async(PostizClient(base_url).create_post(api_key, postiz_payload, timeout_s=40.0))
-                published.extend(str(d.get("label") or d.get("provider")) for d in ready_postiz)
-            except InstagramMediaPrepareError as exc:
-                errors.append(str(exc))
-            except PostizAPIError as exc:
-                errors.append(str(exc))
-            except Exception as exc:
-                logger.exception("[OWNER_AGENT] Postiz publish failed")
-                errors.append(str(exc))
+    if ready_social:
+        try:
+            social_payload = coerce_tiktok_privacy_for_unaudited_app(
+                build_postiz_payload(ready_social, caption=caption, media_urls=list(urls))
+            )
+            social_payload = InstagramMediaPrepareService().prepare_postiz_payload(
+                social_payload
+            )
+            run_async(publish_marketing_posts(db, user.id, social_payload))
+            published.extend(str(d.get("label") or d.get("provider")) for d in ready_social)
+        except InstagramMediaPrepareError as exc:
+            errors.append(str(exc))
+        except (ZernioAPIError, PostizAPIError) as exc:
+            errors.append(str(exc))
+        except Exception as exc:
+            logger.exception("[OWNER_AGENT] Social publish failed")
+            errors.append(str(exc))
 
     if not published:
         return json.loads(_err("; ".join(errors) if errors else "Publishing failed."))

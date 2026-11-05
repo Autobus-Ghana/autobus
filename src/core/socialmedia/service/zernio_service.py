@@ -24,7 +24,7 @@ from core.socialmedia.model.ZernioWebhookEvent import ZernioWebhookEvent
 from core.socialmedia.service.zernio_client import ZernioAPIError, ZernioClient
 from core.socialmedia.service.zernio_mapping import (
     INBOX_WEBHOOK_EVENTS,
-    ZERNIO_MESSAGING_ONLY_PLATFORMS,
+    ZERNIO_MARKETING_PLATFORMS,
     ZERNIO_PLATFORMS,
     account_connected_parts,
     build_create_post_body,
@@ -190,7 +190,7 @@ def connect_authorization(
         raise ZernioAPIError(f"{platform} is not connected through Zernio", status_code=400)
     if not zernio_enabled():
         raise ZernioAPIError(
-            "ZERNIO_API_KEY is not configured. Instagram, Facebook, TikTok, and WhatsApp connect through Zernio.",
+            "ZERNIO_API_KEY is not configured. Instagram, WhatsApp, Facebook, X, and Snapchat connect through Zernio.",
             status_code=400,
         )
 
@@ -370,9 +370,8 @@ def find_account(db: Session, user_id: str, local_or_remote_id: str) -> Optional
 def posting_integrations(db: Session, user_id: str) -> List[Dict[str, Any]]:
     """Connected Zernio accounts for the marketing account list.
 
-    Instagram is listed from /instagram/accounts so it is not shown twice.
-    Refresh from Zernio first so a channel that connected without a callback
-    (YouTube often does) still appears when the composer loads.
+    Instagram is listed from /instagram/accounts. TikTok and YouTube are listed
+    from Postiz. Facebook, X, and Snapchat stay here.
     """
     try:
         sync_accounts_from_zernio(db, user_id)
@@ -381,7 +380,7 @@ def posting_integrations(db: Session, user_id: str) -> List[Dict[str, Any]]:
         db.rollback()
     rows = []
     for account in list_accounts(db, user_id):
-        if account.platform == "instagram" or account.platform in ZERNIO_MESSAGING_ONLY_PLATFORMS:
+        if account.platform not in ZERNIO_MARKETING_PLATFORMS:
             continue
         rows.append(integration_row(account))
     return rows
