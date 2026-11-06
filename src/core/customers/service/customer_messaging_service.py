@@ -1,8 +1,10 @@
 import json
 import logging
 import os
+import re
 import smtplib
 import ssl
+import uuid
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -17,16 +19,33 @@ from core.customers.dto.customer_dto import (
     CustomerMessageResponse,
 )
 from core.customers.service.customer_service import CustomerService
-from core.customers.utility.network_detector import Network
 from core.email.sender_email import SenderEmailNotConfigured, sender_email_from_user
+from core.sms_sender_id.model.SmsSenderIdRegistration import (
+    SmsSenderIdRegistration,
+    SmsSenderIdStatus,
+)
+from core.socialmedia.service.zernio_client import ZernioAPIError, ZernioClient
 from core.user.model.User import User
-from core.wirepick.service.wirepickservice import WirepickSMSService, WirepickSMSException
+from utilities.auth_subject import resolve_internal_user_id
 
 logger = logging.getLogger(__name__)
 
-_SMS_NETWORKS = {Network.MTN, Network.VOD, Network.AIR}
 _SENT_SMS_KEY_PREFIX = "sms:sent:"
 _SENT_SMS_MAX = 100
+
+
+def _e164(phone: str) -> str:
+    raw = (phone or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return ""
+    if raw.startswith("+"):
+        return f"+{digits}"
+    if digits.startswith("233"):
+        return f"+{digits}"
+    if digits.startswith("0") and len(digits) == 10:
+        return f"+233{digits[1:]}"
+    return f"+{digits}"
 
 
 class CustomerMessagingService:
@@ -35,8 +54,24 @@ class CustomerMessagingService:
     def __init__(self, db: Session, redis_client=None):
         self.db = db
         self.customer_service = CustomerService(db)
-        self.sms_service = WirepickSMSService()
         self._redis_client = redis_client
+
+    def _approved_sender_id(self, user_id: str) -> str:
+        internal_id = resolve_internal_user_id(self.db, user_id)
+        row = (
+            self.db.query(SmsSenderIdRegistration)
+            .filter(
+                SmsSenderIdRegistration.user_id == internal_id,
+                SmsSenderIdRegistration.status == SmsSenderIdStatus.APPROVED,
+                SmsSenderIdRegistration.is_active.is_(True),
+            )
+            .order_by(SmsSenderIdRegistration.created_at.desc())
+            .first()
+        )
+        sender = (row.sender_id if row is not None else "").strip()
+        if not sender:
+            raise ValueError("Register an SMS sender ID before sending to customers.")
+        return sender
 
     def send_sms(
         self,
@@ -44,6 +79,8 @@ class CustomerMessagingService:
         customer_ids: List[int],
         message: str,
     ) -> CustomerMessageResponse:
+        sender_id = self._approved_sender_id(user_id)
+        client = ZernioClient()
         customers_by_id = {
             c.id: c for c in self.customer_service.get_customers_by_ids(customer_ids, user_id)
         }
@@ -62,59 +99,49 @@ class CustomerMessagingService:
                 )
                 continue
 
-            network_enum = getattr(Network, customer.network, None)
-            if network_enum not in _SMS_NETWORKS:
+            phone = _e164(getattr(customer, "customer_number", "") or "")
+            if not phone:
                 results.append(
                     CustomerMessageRecipientResult(
                         customer_id=customer.id,
                         customer_name=customer.name,
                         success=False,
-                        message=(
-                            f"SMS is only supported for mobile money customers "
-                            f"(MTN, VOD, AIR). This customer uses network {customer.network}."
-                        ),
+                        message="This customer has no phone number.",
                     )
                 )
                 continue
 
-            phone = customer.customer_number
             try:
-                sms_result = self.sms_service.send_sms(phone, message)
-                if sms_result.get("success"):
-                    self._record_sent_sms(
-                        user_id,
-                        phone=phone,
-                        message=message,
-                        status="Sent",
+                sent = client.send_sms(
+                    sender_id=sender_id,
+                    to=phone,
+                    text=message,
+                    idempotency_key=str(uuid.uuid4()),
+                )
+                status_name = str(sent.get("status") or "sent").lower()
+                self._record_sent_sms(
+                    user_id,
+                    phone=phone,
+                    message=message,
+                    status=status_name,
+                )
+                results.append(
+                    CustomerMessageRecipientResult(
+                        customer_id=customer.id,
+                        customer_name=customer.name,
+                        success=True,
+                        message="SMS sent successfully",
+                        destination=phone,
                     )
-                    results.append(
-                        CustomerMessageRecipientResult(
-                            customer_id=customer.id,
-                            customer_name=customer.name,
-                            success=True,
-                            message="SMS sent successfully",
-                            destination=phone,
-                        )
-                    )
-                else:
-                    error = sms_result.get("error", "SMS provider error")
-                    results.append(
-                        CustomerMessageRecipientResult(
-                            customer_id=customer.id,
-                            customer_name=customer.name,
-                            success=False,
-                            message=f"Failed to send SMS: {error}",
-                            destination=phone,
-                        )
-                    )
-            except WirepickSMSException as exc:
-                logger.error("Wirepick SMS error for customer %s: %s", customer.id, exc)
+                )
+            except ZernioAPIError as exc:
+                logger.error("Zernio SMS error for customer %s: %s", customer.id, exc)
                 results.append(
                     CustomerMessageRecipientResult(
                         customer_id=customer.id,
                         customer_name=customer.name,
                         success=False,
-                        message="Failed to send SMS. Please try again later.",
+                        message=str(exc) or "Failed to send SMS. Please try again later.",
                         destination=phone,
                     )
                 )

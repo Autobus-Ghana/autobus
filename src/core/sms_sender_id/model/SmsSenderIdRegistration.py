@@ -35,6 +35,7 @@ class SmsSenderIdRegistration(Base):
     )
 
     sender_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    zernio_sender_id: Mapped[Optional[str]] = mapped_column(String(64))
     company_name: Mapped[Optional[str]] = mapped_column(String(255))
     notes: Mapped[Optional[str]] = mapped_column(Text)
 

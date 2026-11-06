@@ -16,6 +16,7 @@ from core.socialmedia.service.zernio_mapping import (
     verify_webhook_signature,
     zernio_id,
     ZERNIO_INBOX_PLATFORMS,
+    ZERNIO_MARKETING_PLATFORMS,
     ZERNIO_PLATFORMS,
 )
 
@@ -184,6 +185,8 @@ class ZernioMappingTests(unittest.TestCase):
         self.assertEqual(parts["text"], "Hi, do you deliver?")
         self.assertIn("whatsapp", ZERNIO_PLATFORMS)
         self.assertEqual(set(ZERNIO_INBOX_PLATFORMS), {"instagram", "whatsapp"})
+        self.assertIn("instagram", ZERNIO_MARKETING_PLATFORMS)
+        self.assertIn("facebook", ZERNIO_MARKETING_PLATFORMS)
         self.assertNotIn("tiktok", ZERNIO_PLATFORMS)
         self.assertNotIn("youtube", ZERNIO_PLATFORMS)
         self.assertEqual(connect_scopes("whatsapp"), "")

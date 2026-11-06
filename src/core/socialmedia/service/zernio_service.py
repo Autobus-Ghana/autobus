@@ -370,8 +370,7 @@ def find_account(db: Session, user_id: str, local_or_remote_id: str) -> Optional
 def posting_integrations(db: Session, user_id: str) -> List[Dict[str, Any]]:
     """Connected Zernio accounts for the marketing account list.
 
-    Instagram is listed from /instagram/accounts. TikTok and YouTube are listed
-    from Postiz. Facebook stays here.
+    TikTok and YouTube are listed from Postiz. Facebook and Instagram stay here.
     """
     try:
         sync_accounts_from_zernio(db, user_id)

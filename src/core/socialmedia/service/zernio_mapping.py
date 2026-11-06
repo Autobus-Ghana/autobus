@@ -20,7 +20,7 @@ ZERNIO_PLATFORMS = (
 ZERNIO_MESSAGING_ONLY_PLATFORMS = frozenset({"whatsapp"})
 
 # Digital marketing accounts that still post through Zernio.
-ZERNIO_MARKETING_PLATFORMS = frozenset({"facebook"})
+ZERNIO_MARKETING_PLATFORMS = frozenset({"facebook", "instagram"})
 
 # Inbox links. Instagram posting also uses the Instagram connect path.
 ZERNIO_INBOX_PLATFORMS = (

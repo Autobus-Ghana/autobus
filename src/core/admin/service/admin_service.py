@@ -537,7 +537,21 @@ class AdminService:
         )
 
     def approve_sender_id(self, registration_id: str, admin: User) -> SenderIdAdminResponse:
+        from core.sms_sender_id.controller.sms_sender_id_controller import (
+            _ensure_zernio_column,
+            _register_with_zernio,
+        )
+
         row = self._get_sender_or_404(registration_id)
+        _ensure_zernio_column(self.db)
+        if not (row.zernio_sender_id or "").strip():
+            remote_id, active = _register_with_zernio(row.sender_id)
+            row.zernio_sender_id = remote_id
+            if not active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Zernio has not activated this sender ID yet.",
+                )
         row.status = SmsSenderIdStatus.APPROVED
         row.rejection_reason = None
         row.reviewed_by = admin.id
@@ -547,7 +561,11 @@ class AdminService:
         return self._sender_to_dto(row)
 
     def reject_sender_id(self, registration_id: str, reason: str, admin: User) -> SenderIdAdminResponse:
+        from core.sms_sender_id.controller.sms_sender_id_controller import _delete_from_zernio
+
         row = self._get_sender_or_404(registration_id)
+        _delete_from_zernio(row.zernio_sender_id)
+        row.zernio_sender_id = None
         row.status = SmsSenderIdStatus.REJECTED
         row.rejection_reason = reason.strip()
         row.reviewed_by = admin.id

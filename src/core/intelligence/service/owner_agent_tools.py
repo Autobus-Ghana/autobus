@@ -257,7 +257,10 @@ def _tool_send_customer_sms(db: Session, user: User, args: Dict[str, Any]) -> Di
     if not ids or not message:
         return json.loads(_err("customer_ids and message are required"))
     CreditService(db).require_credits(user.id, CreditType.SMS.value, float(len(ids)), "customer_sms")
-    result = CustomerMessagingService(db).send_sms(user.id, ids, message)
+    try:
+        result = CustomerMessagingService(db).send_sms(user.id, ids, message)
+    except ValueError as exc:
+        return json.loads(_err(str(exc)))
     return _ok(result.model_dump(mode="json"))
 
 
@@ -466,11 +469,11 @@ def _publish_to_destinations(
             )
         if media_looks_like_video(urls):
             return json.loads(
-                _err("No social accounts are linked. Connect YouTube, TikTok, or Facebook under Marketing.")
+                _err("No social accounts are linked. Connect YouTube, TikTok, Facebook, or Instagram under Marketing.")
             )
         return json.loads(
             _err(
-                "No linked accounts can take this image. Connect Facebook, or generate a video for YouTube and TikTok."
+                "No linked accounts can take this image. Connect Facebook or Instagram, or generate a video for YouTube and TikTok."
             )
         )
 

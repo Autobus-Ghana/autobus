@@ -271,7 +271,7 @@ async def initiate_oauth_flow(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     "That platform is not available. "
-                    "Digital Marketing links YouTube, TikTok, and Facebook. "
+                    "Digital Marketing links YouTube, TikTok, Facebook, and Instagram. "
                     "Inbox links Instagram and WhatsApp."
                 ),
             )
@@ -731,7 +731,7 @@ async def postiz_list_integrations(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
-    """Connected marketing accounts. Facebook comes from Zernio. TikTok and YouTube come from Postiz."""
+    """Connected marketing accounts. Facebook and Instagram come from Zernio. TikTok and YouTube come from Postiz."""
     internal_user_id = resolve_internal_user_id(db, jwt_subject)
     return posting_integrations(db, internal_user_id) + list_native_integrations(internal_user_id, db)
 

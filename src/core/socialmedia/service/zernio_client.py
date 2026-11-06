@@ -200,6 +200,33 @@ class ZernioClient:
             params={"mediaType": media_type},
         )
 
+    def create_sms_sender_id(self, sender_id: str) -> Dict[str, Any]:
+        return self.request(
+            "POST",
+            "/sms/sender-ids",
+            json_body={"senderId": sender_id},
+        )
+
+    def delete_sms_sender_id(self, sender_id: str) -> Dict[str, Any]:
+        return self.request("DELETE", f"/sms/sender-ids/{sender_id}")
+
+    def send_sms(
+        self,
+        *,
+        sender_id: str,
+        to: str,
+        text: str,
+        idempotency_key: str = "",
+    ) -> Dict[str, Any]:
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        return self.request(
+            "POST",
+            "/sms/messages",
+            json_body={"from": sender_id, "to": to, "text": text},
+            headers=headers,
+            timeout=45,
+        )
+
     def send_inbox_message(
         self,
         conversation_id: str,

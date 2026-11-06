@@ -10,9 +10,11 @@ from typing import List, Optional
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from core.auth.dependencies import require_admin
+from core.socialmedia.service.zernio_client import ZernioAPIError, ZernioClient
 from utilities.auth_subject import resolve_internal_user_id
 from core.sms_sender_id.model.SmsSenderIdRegistration import (
     SmsSenderIdRegistration,
@@ -71,6 +73,43 @@ class SmsSenderIdCreateRequest(BaseModel):
         return t or None
 
 
+def _ensure_zernio_column(db: Session) -> None:
+    """Existing databases were created before Zernio stored a sender id."""
+    try:
+        db.execute(
+            text(
+                "ALTER TABLE sms_sender_id_registrations "
+                "ADD COLUMN IF NOT EXISTS zernio_sender_id VARCHAR(64)"
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _register_with_zernio(sender_id: str) -> tuple[str, bool]:
+    try:
+        created = ZernioClient().create_sms_sender_id(sender_id)
+    except ZernioAPIError as exc:
+        code = exc.status_code if exc.status_code < 500 else 502
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    remote_id = str(created.get("id") or "").strip()
+    if not remote_id:
+        raise HTTPException(status_code=502, detail="Zernio did not return a sender ID.")
+    active = created.get("isActive") is not False
+    return remote_id, active
+
+
+def _delete_from_zernio(remote_id: Optional[str]) -> None:
+    iid = (remote_id or "").strip()
+    if not iid:
+        return
+    try:
+        ZernioClient().delete_sms_sender_id(iid)
+    except ZernioAPIError:
+        return
+
+
 def _company_name_from_user(db: Session, user_id: str) -> Optional[str]:
     """Use the signup business name so Sender IDs cannot spoof another company."""
     user = db.query(User).filter(User.id == user_id).first()
@@ -124,6 +163,7 @@ def register_sms_sender_id(
     user_id = resolve_internal_user_id(db, jwt_subject)
     sender_id = body.sender_id
     company_name = _company_name_from_user(db, user_id)
+    _ensure_zernio_column(db)
 
     existing = (
         db.query(SmsSenderIdRegistration)
@@ -136,7 +176,9 @@ def register_sms_sender_id(
     )
     if existing:
         if existing.status == SmsSenderIdStatus.REJECTED:
-            existing.status = SmsSenderIdStatus.PENDING
+            remote_id, active = _register_with_zernio(sender_id)
+            existing.status = SmsSenderIdStatus.APPROVED if active else SmsSenderIdStatus.PENDING
+            existing.zernio_sender_id = remote_id
             existing.company_name = company_name
             existing.notes = body.notes
             existing.rejection_reason = None
@@ -167,13 +209,15 @@ def register_sms_sender_id(
             detail="This Sender ID is already approved for another account.",
         )
 
+    remote_id, active = _register_with_zernio(sender_id)
     row = SmsSenderIdRegistration(
         id=_new_id(),
         user_id=user_id,
         sender_id=sender_id,
+        zernio_sender_id=remote_id,
         company_name=company_name,
         notes=body.notes,
-        status=SmsSenderIdStatus.PENDING,
+        status=SmsSenderIdStatus.APPROVED if active else SmsSenderIdStatus.PENDING,
         is_active=True,
     )
     db.add(row)
@@ -233,6 +277,7 @@ def deactivate_sms_sender_id(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sender ID registration not found")
+    _delete_from_zernio(row.zernio_sender_id)
     row.is_active = False
     db.commit()
     db.refresh(row)
@@ -255,6 +300,14 @@ def approve_sms_sender_id(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sender ID registration not found")
+    if not (row.zernio_sender_id or "").strip():
+        remote_id, active = _register_with_zernio(row.sender_id)
+        row.zernio_sender_id = remote_id
+        if not active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Zernio has not activated this sender ID yet.",
+            )
     row.status = SmsSenderIdStatus.APPROVED
     row.rejection_reason = None
     row.reviewed_by = admin.id
@@ -281,6 +334,8 @@ def reject_sms_sender_id(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sender ID registration not found")
+    _delete_from_zernio(row.zernio_sender_id)
+    row.zernio_sender_id = None
     row.status = SmsSenderIdStatus.REJECTED
     row.rejection_reason = (body.reason or "").strip() or None
     row.reviewed_by = admin.id
