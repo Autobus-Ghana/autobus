@@ -34,23 +34,24 @@ class ApplyTiktokOauthScopesTest(unittest.TestCase):
                 "user.info.stats",
             ],
         )
-        self.assertEqual(query["disable_auto_auth"], ["1"])
+        self.assertNotIn("disable_auto_auth", query)
 
-    def test_forces_consent_when_tiktok_would_auto_authorize(self):
+    def test_strips_disable_auto_auth_that_blanks_iphone(self):
         url = (
             "https://www.tiktok.com/v2/auth/authorize/"
             "?client_key=abc&scope=user.info.basic&response_type=code"
+            "&disable_auto_auth=1"
         )
         rewritten = apply_tiktok_oauth_scopes(url, slug="tiktok")
         query = parse_qs(urlsplit(rewritten).query)
-        self.assertEqual(query["disable_auto_auth"], ["1"])
+        self.assertNotIn("disable_auto_auth", query)
         self.assertEqual(query["scope"], ["user.info.basic"])
 
-    def test_forces_consent_even_without_scope_query(self):
-        url = "https://www.tiktok.com/v2/auth/authorize/?client_key=abc"
+    def test_leaves_client_key_when_scope_is_missing(self):
+        url = "https://www.tiktok.com/v2/auth/authorize/?client_key=abc&disable_auto_auth=1"
         rewritten = apply_tiktok_oauth_scopes(url, slug="tiktok")
         query = parse_qs(urlsplit(rewritten).query)
-        self.assertEqual(query["disable_auto_auth"], ["1"])
+        self.assertNotIn("disable_auto_auth", query)
         self.assertEqual(query["client_key"], ["abc"])
 
     def test_ignores_non_tiktok_slug(self):

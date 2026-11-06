@@ -582,9 +582,9 @@ def apply_tiktok_oauth_scopes(
 ) -> str:
     """Rewrite TikTok authorize URLs before we send the user to Login Kit.
 
-    Drop deprecated scopes Postiz still puts on the URL, and always set
-    ``disable_auto_auth=1``. Without that flag TikTok skips login and
-    consent when the same phone already authorized this client.
+    Drop deprecated scopes Postiz still puts on the URL. Do not set
+    ``disable_auto_auth``. Forcing that flag makes TikTok's consent page
+    stay blank on iPhone.
     """
     url = (authorization_url or "").strip()
     if not url:
@@ -610,9 +610,8 @@ def apply_tiktok_oauth_scopes(
         if kept:
             query["scope"] = ",".join(kept)
 
-    # TikTok Login Kit: 0 (default) auto-approves a prior grant; 1 shows
-    # the authorization page so the user can log in and accept terms again.
-    query["disable_auto_auth"] = "1"
+    # Forcing disable_auto_auth=1 leaves a blank consent screen on iPhone.
+    query.pop("disable_auto_auth", None)
     return urlunsplit(
         (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
     )
