@@ -20,14 +20,17 @@ ZERNIO_PLATFORMS = (
 ZERNIO_MESSAGING_ONLY_PLATFORMS = frozenset({"whatsapp"})
 
 # Digital marketing accounts that still post through Zernio.
-ZERNIO_MARKETING_PLATFORMS = frozenset({"facebook", "twitter", "snapchat"})
+ZERNIO_MARKETING_PLATFORMS = frozenset({"facebook"})
 
 # Inbox links. Instagram posting also uses the Instagram connect path.
 ZERNIO_INBOX_PLATFORMS = (
     "instagram",
     "whatsapp",
-    "twitter",
 )
+
+# X and Snapchat stay in ZERNIO_PLATFORMS so existing records still sync,
+# but new links are refused.
+ZERNIO_CONNECT_DISABLED = frozenset({"twitter", "x", "snapchat"})
 
 # Autobus conversation channel segment for each inbox platform.
 CHANNEL_BY_PLATFORM = {

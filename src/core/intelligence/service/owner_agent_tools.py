@@ -466,11 +466,11 @@ def _publish_to_destinations(
             )
         if media_looks_like_video(urls):
             return json.loads(
-                _err("No social accounts are linked. Connect YouTube, TikTok, Facebook, X, or Snapchat under Marketing.")
+                _err("No social accounts are linked. Connect YouTube, TikTok, or Facebook under Marketing.")
             )
         return json.loads(
             _err(
-                "No linked accounts can take this image. Connect Facebook, X, or Snapchat, or generate a video for YouTube and TikTok."
+                "No linked accounts can take this image. Connect Facebook, or generate a video for YouTube and TikTok."
             )
         )
 

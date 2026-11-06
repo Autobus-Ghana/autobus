@@ -2,7 +2,7 @@
 
 Postiz holds the TikTok and Google app credentials and returns the provider
 OAuth URL. Publishing those two platforms goes to Postiz, which calls TikTok
-and YouTube. Instagram, Facebook, X, Snapchat, and WhatsApp stay on Zernio.
+and YouTube. Instagram, Facebook, and WhatsApp stay on Zernio.
 """
 
 from __future__ import annotations
@@ -294,7 +294,7 @@ async def publish_marketing_posts(
     user_id: str,
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Publish Facebook, X, Snapchat, and Instagram through Zernio, and TikTok/YouTube through Postiz."""
+    """Publish Facebook and Instagram through Zernio, and TikTok/YouTube through Postiz."""
     from core.socialmedia.service.zernio_client import ZernioAPIError
     from core.socialmedia.service.zernio_service import publish_targets, zernio_enabled
 
@@ -312,7 +312,7 @@ async def publish_marketing_posts(
     if zernio_targets:
         if not zernio_enabled():
             raise ZernioAPIError(
-                "ZERNIO_API_KEY is not configured. Instagram, Facebook, X, and Snapchat post through Zernio.",
+                "ZERNIO_API_KEY is not configured. Instagram and Facebook post through Zernio.",
                 status_code=400,
             )
         schedule = str(payload.get("type") or "").strip().lower() == "schedule"

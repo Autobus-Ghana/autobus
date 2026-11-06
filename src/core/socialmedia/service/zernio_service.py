@@ -190,7 +190,7 @@ def connect_authorization(
         raise ZernioAPIError(f"{platform} is not connected through Zernio", status_code=400)
     if not zernio_enabled():
         raise ZernioAPIError(
-            "ZERNIO_API_KEY is not configured. Instagram, WhatsApp, Facebook, X, and Snapchat connect through Zernio.",
+            "ZERNIO_API_KEY is not configured. Instagram, WhatsApp, and Facebook connect through Zernio.",
             status_code=400,
         )
 
@@ -371,7 +371,7 @@ def posting_integrations(db: Session, user_id: str) -> List[Dict[str, Any]]:
     """Connected Zernio accounts for the marketing account list.
 
     Instagram is listed from /instagram/accounts. TikTok and YouTube are listed
-    from Postiz. Facebook, X, and Snapchat stay here.
+    from Postiz. Facebook stays here.
     """
     try:
         sync_accounts_from_zernio(db, user_id)

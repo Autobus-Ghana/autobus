@@ -61,7 +61,7 @@ from core.socialmedia.service.instagram_media_prepare import (
     payload_has_attached_media,
 )
 from core.socialmedia.service.zernio_client import ZernioAPIError
-from core.socialmedia.service.zernio_mapping import ZERNIO_PLATFORMS
+from core.socialmedia.service.zernio_mapping import ZERNIO_CONNECT_DISABLED, ZERNIO_PLATFORMS
 from core.socialmedia.service.zernio_service import (
     connect_authorization,
     disconnect_account as disconnect_zernio_account,
@@ -235,6 +235,11 @@ async def initiate_oauth_flow(
             zernio_slug = "twitter" if zernio_slug == "x" else "instagram"
         if zernio_slug == "google-business":
             zernio_slug = "googlebusiness"
+        if zernio_slug in ZERNIO_CONNECT_DISABLED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X and Snapchat are not available to link.",
+            )
         is_whatsapp_status = platform.strip().lower().replace("_", "-") == "whatsapp-status"
         if platform_upper in {"TIKTOK", "YOUTUBE"} and postiz_slug:
             try:
@@ -266,8 +271,8 @@ async def initiate_oauth_flow(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     "That platform is not available. "
-                    "Digital Marketing links YouTube, TikTok, Facebook, X, and Snapchat. "
-                    "Inbox links Instagram, WhatsApp, and X."
+                    "Digital Marketing links YouTube, TikTok, and Facebook. "
+                    "Inbox links Instagram and WhatsApp."
                 ),
             )
 
@@ -726,7 +731,7 @@ async def postiz_list_integrations(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
-    """Connected marketing accounts. Facebook, X, and Snapchat come from Zernio. TikTok and YouTube come from Postiz."""
+    """Connected marketing accounts. Facebook comes from Zernio. TikTok and YouTube come from Postiz."""
     internal_user_id = resolve_internal_user_id(db, jwt_subject)
     return posting_integrations(db, internal_user_id) + list_native_integrations(internal_user_id, db)
 

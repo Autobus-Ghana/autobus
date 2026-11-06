@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 AUTOBUS_IG_PREFIX = "autobus-ig-"
 SKIP_POSTIZ_IDENTIFIERS = frozenset({"whatsapp"})
 MARKETING_POST_IDENTIFIERS = frozenset(
-    {"youtube", "tiktok", "facebook", "twitter", "x", "snapchat"}
+    {"youtube", "tiktok", "facebook"}
 )
 VIDEO_ONLY_PROVIDERS = frozenset({"youtube", "tiktok"})
 PLATFORM_ALIASES = {

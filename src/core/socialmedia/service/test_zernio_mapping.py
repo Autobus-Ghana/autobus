@@ -183,7 +183,7 @@ class ZernioMappingTests(unittest.TestCase):
         self.assertEqual(parts["sender_id"], "233241234567")
         self.assertEqual(parts["text"], "Hi, do you deliver?")
         self.assertIn("whatsapp", ZERNIO_PLATFORMS)
-        self.assertEqual(set(ZERNIO_INBOX_PLATFORMS), {"instagram", "whatsapp", "twitter"})
+        self.assertEqual(set(ZERNIO_INBOX_PLATFORMS), {"instagram", "whatsapp"})
         self.assertNotIn("tiktok", ZERNIO_PLATFORMS)
         self.assertNotIn("youtube", ZERNIO_PLATFORMS)
         self.assertEqual(connect_scopes("whatsapp"), "")
