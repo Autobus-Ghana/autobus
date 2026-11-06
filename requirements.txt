@@ -76,13 +76,14 @@ sendgrid==6.11.0
 boto3==1.34.131
 datasets==4.8.4
 another-fastapi-jwt-auth==0.1.7
-# LangChain and related dependencies
-langchain
-langchain-core
-langchain-community
-langchain-openai
-langchain-text-splitters
-openai
+# LangChain and related dependencies.
+# Pinned so image builds do not backtrack through current langsmith/httpx2 releases.
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-community==0.3.27
+langchain-openai==0.3.35
+langchain-text-splitters==0.3.11
+langsmith==0.11.2
 # File content extraction dependencies
 PyPDF2>=3.0.0
 python-docx>=0.8.11
