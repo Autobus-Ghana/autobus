@@ -34,6 +34,36 @@ _SENT_SMS_KEY_PREFIX = "sms:sent:"
 _SENT_SMS_MAX = 100
 
 
+_SMS_REGION_NAMES = {
+    "GH": "Ghana",
+    "NG": "Nigeria",
+    "KE": "Kenya",
+    "ZA": "South Africa",
+    "UG": "Uganda",
+    "TZ": "Tanzania",
+    "CI": "Côte d'Ivoire",
+    "SN": "Senegal",
+    "GB": "the UK",
+    "US": "the US",
+    "CA": "Canada",
+}
+_REGION_RE = re.compile(r"region\s+'([A-Za-z]{2})'", re.IGNORECASE)
+
+
+def friendly_delivery_error(raw: str) -> str:
+    """Turn a provider dump into a sentence a customer can act on."""
+    text = (raw or "").strip()
+    lower = text.lower()
+    region = _REGION_RE.search(text)
+    if "whitelisted destinations" in lower or region is not None:
+        code = region.group(1).upper() if region is not None else ""
+        place = _SMS_REGION_NAMES.get(code, "this country")
+        return f"SMS to {place} numbers isn't available yet."
+    if not text or "zernio" in lower or text.startswith("{") or len(text) > 160:
+        return "The message couldn't be sent. Try again in a moment."
+    return text
+
+
 def _e164(phone: str) -> str:
     raw = (phone or "").strip()
     digits = re.sub(r"\D", "", raw)
@@ -147,7 +177,7 @@ class CustomerMessagingService:
                         customer_id=customer.id,
                         customer_name=customer.name,
                         success=False,
-                        message=str(exc) or "Failed to send SMS. Please try again later.",
+                        message=friendly_delivery_error(str(exc)),
                         destination=phone,
                     )
                 )
