@@ -35,42 +35,36 @@ def sender_email_from_user(user: Any) -> Optional[str]:
 
 def normalize_sender_email(raw: str) -> str:
     """
-    Accept a full address, a local part, or `noreply.useautobus.com`.
+    Accept a full address or `local.domain` shorthand.
 
-    All of these become `noreply@useautobus.com` when the sender domain is
-    `useautobus.com`.
+    `noreply@usegreenmall.com` and `noreply.usegreenmall.com` both become
+    `noreply@usegreenmall.com`. A name with no domain, such as `noreply`,
+    uses the default Autobus domain.
     """
     text = (raw or "").strip()
     if not text:
         raise SenderEmailInvalid(
-            f"Enter a from email, for example noreply@{sender_domain()}"
+            "Enter a from email, for example noreply@usegreenmall.com"
         )
 
-    domain = sender_domain()
     if "@" not in text:
-        suffix = f".{domain}"
-        lower = text.lower()
-        if lower.endswith(suffix) and lower != domain:
-            local = text[: -len(suffix)].strip()
-            text = f"{local}@{domain}"
+        if "." in text:
+            local, _, host = text.partition(".")
+            text = f"{local}@{host}"
         else:
-            text = f"{text}@{domain}"
+            text = f"{text}@{sender_domain()}"
 
     local, _, host = text.partition("@")
     local = local.strip()
-    host = host.strip().lower()
-    if not local or not host:
+    host = host.strip().lower().rstrip(".")
+    if not local or not host or "@" in local or "@" in host:
         raise SenderEmailInvalid(
-            f"Enter a from email, for example noreply@{domain}"
-        )
-    if host != domain:
-        raise SenderEmailInvalid(
-            f"From email must use @{domain}, for example noreply@{domain}"
+            "Enter a from email, for example noreply@usegreenmall.com"
         )
 
     email = f"{local}@{host}"
     if not _EMAIL_RE.match(email):
         raise SenderEmailInvalid(
-            f"That does not look like a valid from email. Try noreply@{domain}"
+            "That does not look like a valid from email. Try noreply@usegreenmall.com"
         )
     return email

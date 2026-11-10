@@ -197,9 +197,8 @@ class CustomerMessagingService:
         user = self._resolve_user(user_id)
         from_email = sender_email_from_user(user)
         if not from_email:
-            domain = os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com").strip()
             raise SenderEmailNotConfigured(
-                f"Add a from email in Messaging before sending. Example: noreply@{domain}"
+                "Add a from email in Messaging before sending. Example: noreply@usegreenmall.com"
             )
 
         display_name = ""
