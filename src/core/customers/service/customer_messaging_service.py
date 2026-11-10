@@ -58,20 +58,26 @@ class CustomerMessagingService:
 
     def _approved_sender_id(self, user_id: str) -> str:
         internal_id = resolve_internal_user_id(self.db, user_id)
-        row = (
+        rows = (
             self.db.query(SmsSenderIdRegistration)
             .filter(
                 SmsSenderIdRegistration.user_id == internal_id,
-                SmsSenderIdRegistration.status == SmsSenderIdStatus.APPROVED,
                 SmsSenderIdRegistration.is_active.is_(True),
             )
             .order_by(SmsSenderIdRegistration.created_at.desc())
-            .first()
+            .all()
         )
-        sender = (row.sender_id if row is not None else "").strip()
-        if not sender:
-            raise ValueError("Register an SMS sender ID before sending to customers.")
-        return sender
+        for row in rows:
+            if row.status != SmsSenderIdStatus.APPROVED:
+                continue
+            sender = (row.sender_id or "").strip()
+            if sender:
+                return sender
+        if any(row.status == SmsSenderIdStatus.PENDING for row in rows):
+            raise ValueError(
+                "Your SMS sender ID is waiting for approval. You can send SMS after it is approved."
+            )
+        raise ValueError("Register an SMS sender ID before sending to customers.")
 
     def send_sms(
         self,
