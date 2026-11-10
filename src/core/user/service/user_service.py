@@ -230,6 +230,20 @@ class UserService:
         self.db.refresh(user)
         return self._to_response(user)
 
+    def clear_current_user_sender_email(self, identifier: str) -> UserResponse:
+        user = self._resolve_identifier(identifier)
+        current = user.get_agent("email_agent") or {}
+        params = dict(current.get("params") or {})
+        params.pop("sender_email", None)
+        current["params"] = params
+        user.set_agent("email_agent", current)
+        flag_modified(user, "agents")
+        user.updated_at = datetime.utcnow()
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return self._to_response(user)
+
     def update_current_user_notification_settings(
         self,
         identifier: str,

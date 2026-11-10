@@ -319,6 +319,17 @@ def update_my_sender_email(
     )
 
 
+@user_routes.delete("/me/sender-email", response_model=UserResponse)
+def clear_my_sender_email(
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Remove the From address used when Autobus sends email on the user's behalf."""
+    current_user_email = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    return user_service.clear_current_user_sender_email(current_user_email)
+
+
 @user_routes.patch("/me", response_model=UserResponse)
 def patch_current_user_endpoint(payload: UserUpdateRequest, authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
     current_user_email = authjwt.get_jwt_subject()

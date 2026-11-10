@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import HTTPException, status
@@ -15,6 +15,7 @@ from core.auth.dependencies import resolve_session_manager
 from core.auth.dto.response.account_deletion import (
     AccountDeletionPreview,
     AccountDeletionResult,
+    DeletionBlocker,
     DeletionBusiness,
     DeletionConnection,
     DeletionSubscription,
@@ -22,11 +23,14 @@ from core.auth.dto.response.account_deletion import (
 from core.auth.service.authservice import AuthService
 from core.chatwoot.model.ChatwootAccount import ChatwootAccount
 from core.customers.model.customer import Customer
+from core.email.sender_email import sender_email_from_user
 from core.instagram.model.InstagramAccount import InstagramAccount
 from core.orders.model.order import Order
 from core.product.model.product import Product
+from core.sms_sender_id.model.SmsSenderIdRegistration import SmsSenderIdRegistration
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.socialmedia.model.SocialAccount import SocialAccount
+from core.socialmedia.model.ZernioAccount import ZernioAccount
 from core.subscription.model.user_subscription import SubscriptionStatus, UserSubscription
 from core.subscription.service.subscription_service import SubscriptionService
 from core.user.model.User import User, UserStatus
@@ -86,6 +90,114 @@ def tombstone_user(user: User, *, now: Optional[datetime] = None) -> None:
     user.enabled = False
     user.status = UserStatus.DELETED
     user.updated_at = stamp
+
+
+_INBOX_PLATFORMS = frozenset({"instagram", "whatsapp"})
+_MARKETING_ZERNIO_PLATFORMS = frozenset({"facebook", "instagram"})
+_PLATFORM_LABELS = {
+    "whatsapp": "WhatsApp",
+    "instagram": "Instagram",
+    "facebook": "Facebook",
+    "tiktok": "TikTok",
+    "youtube": "YouTube",
+}
+
+
+def _platform_label(platform: str) -> str:
+    key = (platform or "").strip().lower()
+    if key in _PLATFORM_LABELS:
+        return _PLATFORM_LABELS[key]
+    titled = key.replace("_", " ").replace("-", " ").title()
+    return titled or "Social account"
+
+
+def _joined_detail(business: Optional[str], text: str) -> Optional[str]:
+    parts = [part for part in ((business or "").strip(), (text or "").strip()) if part]
+    return " · ".join(parts) or None
+
+
+def _sms_status_label(status: Any) -> str:
+    raw = getattr(status, "value", status)
+    text = str(raw or "pending").strip().lower()
+    if text == "approved":
+        return "Approved"
+    if text == "rejected":
+        return "Rejected"
+    return "Pending"
+
+
+def account_deletion_blockers(
+    *,
+    business_name: Optional[str] = None,
+    whatsapp_accounts: Optional[List[Any]] = None,
+    instagram_accounts: Optional[List[Any]] = None,
+    zernio_accounts: Optional[List[Any]] = None,
+    native_marketing: Optional[List[Dict[str, Any]]] = None,
+    native_marketing_error: Optional[str] = None,
+    sender_email: Optional[str] = None,
+    sms_registrations: Optional[List[Any]] = None,
+) -> List[DeletionBlocker]:
+    """Links and sender identities that must be removed before account deletion."""
+    items: List[DeletionBlocker] = []
+
+    def add(area: str, label: str, detail: str = "") -> None:
+        items.append(
+            DeletionBlocker(
+                area=area,
+                label=label,
+                detail=_joined_detail(business_name, detail),
+            )
+        )
+
+    for row in whatsapp_accounts or []:
+        add(
+            "inbox",
+            "WhatsApp",
+            str(
+                getattr(row, "display_phone_number", None)
+                or getattr(row, "verified_name", None)
+                or getattr(row, "phone_number_id", None)
+                or ""
+            ),
+        )
+    for row in instagram_accounts or []:
+        handle = str(getattr(row, "username", None) or "").strip()
+        name = str(getattr(row, "name", None) or "").strip()
+        detail = f"@{handle}" if handle else name
+        add("inbox", "Instagram", detail)
+        add("digital_marketing", "Instagram", detail)
+    for row in zernio_accounts or []:
+        platform = str(getattr(row, "platform", None) or "").strip().lower()
+        handle = str(getattr(row, "username", None) or "").strip().lstrip("@")
+        name = str(getattr(row, "display_name", None) or "").strip()
+        detail = f"@{handle}" if handle else name
+        label = _platform_label(platform)
+        if platform in _INBOX_PLATFORMS:
+            add("inbox", label, detail)
+        if platform in _MARKETING_ZERNIO_PLATFORMS:
+            add("digital_marketing", label, detail)
+    if native_marketing_error:
+        add("digital_marketing", "TikTok and YouTube", native_marketing_error)
+    for row in native_marketing or []:
+        if not isinstance(row, dict):
+            continue
+        platform = str(row.get("identifier") or "").strip().lower()
+        name = str(row.get("name") or "").strip()
+        profile = str(row.get("profile") or "").strip()
+        add("digital_marketing", _platform_label(platform), name or profile)
+    email = str(sender_email or "").strip()
+    if email:
+        add("sender_email", "Sender email", email)
+    for row in sms_registrations or []:
+        sender_id = str(getattr(row, "sender_id", None) or "").strip()
+        add(
+            "sms_sender_id",
+            "SMS sender ID",
+            f"{sender_id} · {_sms_status_label(getattr(row, 'status', None))}"
+            if sender_id
+            else _sms_status_label(getattr(row, "status", None)),
+        )
+    return items
 
 
 def deletion_notes(*, has_paid_subscription: bool) -> List[str]:
@@ -155,6 +267,7 @@ class AccountDeletionService:
             plan = getattr(paid_sub, "plan", None)
             plan_name = getattr(plan, "name", None)
 
+        blockers = self.deletion_blockers(users)
         return AccountDeletionPreview(
             login_email=manager.email,
             businesses=[
@@ -169,6 +282,8 @@ class AccountDeletionService:
                 for user in users
             ],
             connections=connections,
+            blockers=blockers,
+            can_delete=not blockers,
             subscription=DeletionSubscription(
                 active=paid_sub is not None,
                 provider=provider,
@@ -220,6 +335,82 @@ class AccountDeletionService:
             )
         return items
 
+    def deletion_blockers(self, users: List[User]) -> List[DeletionBlocker]:
+        show_business = len(users) > 1
+        items: List[DeletionBlocker] = []
+        for user in users:
+            business = None
+            if show_business:
+                business = (
+                    str(getattr(user, "company", None) or getattr(user, "fullname", None) or "Business")
+                    .strip()
+                    or "Business"
+                )
+            whatsapp = (
+                self.db.query(WhatsAppAccount)
+                .filter(WhatsAppAccount.user_id == user.id, WhatsAppAccount.is_active.is_(True))
+                .all()
+            )
+            instagram = (
+                self.db.query(InstagramAccount)
+                .filter(InstagramAccount.user_id == user.id, InstagramAccount.is_active.is_(True))
+                .all()
+            )
+            zernio = (
+                self.db.query(ZernioAccount)
+                .filter(ZernioAccount.user_id == user.id, ZernioAccount.is_active.is_(True))
+                .all()
+            )
+            native, native_error = self._native_marketing(user.id)
+            sms = (
+                self.db.query(SmsSenderIdRegistration)
+                .filter(
+                    SmsSenderIdRegistration.user_id == user.id,
+                    SmsSenderIdRegistration.is_active.is_(True),
+                )
+                .all()
+            )
+            items.extend(
+                account_deletion_blockers(
+                    business_name=business,
+                    whatsapp_accounts=whatsapp,
+                    instagram_accounts=instagram,
+                    zernio_accounts=zernio,
+                    native_marketing=native,
+                    native_marketing_error=native_error,
+                    sender_email=sender_email_from_user(user),
+                    sms_registrations=sms,
+                )
+            )
+        return items
+
+    def _native_marketing(self, user_id: str) -> tuple:
+        try:
+            from core.socialmedia.service.postiz_native import list_native_integrations_checked
+
+            return list_native_integrations_checked(user_id, self.db)
+        except Exception as exc:
+            logger.warning("Could not check marketing accounts for %s: %s", user_id, exc)
+            return [], "Could not verify TikTok and YouTube accounts. Try again."
+
+    def _require_clear(self, users: List[User]) -> None:
+        blockers = self.deletion_blockers(users)
+        if not blockers:
+            return
+        summary = "; ".join(
+            f"{item.label}" + (f" ({item.detail})" if item.detail else "")
+            for item in blockers[:12]
+        )
+        extra = f" and {len(blockers) - 12} more" if len(blockers) > 12 else ""
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Unlink Inbox and Digital Marketing accounts, remove your sender email, "
+                "and delete your SMS sender IDs before deleting this account: "
+                f"{summary}{extra}."
+            ),
+        )
+
     async def delete_account(
         self,
         current_user: User,
@@ -229,6 +420,7 @@ class AccountDeletionService:
         users = self._login_users(current_user, authjwt)
         manager = users[0]
         self._verify_login_password(manager, password)
+        self._require_clear(users)
 
         emails = [u.email for u in users if u.email]
         deleted_ids = [u.id for u in users]

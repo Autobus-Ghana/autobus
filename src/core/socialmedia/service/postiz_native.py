@@ -101,12 +101,14 @@ async def ensure_postiz_api_key(user_id: str, db: Session) -> Optional[str]:
     return postiz_api_key
 
 
-def list_native_integrations(user_id: str, db: Session) -> List[Dict[str, Any]]:
-    """Connected TikTok and YouTube accounts from Postiz."""
+def list_native_integrations_checked(
+    user_id: str, db: Session
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Connected TikTok and YouTube accounts, plus an error when Postiz could not be read."""
     base_url = postiz_base_url()
     api_key = resolve_postiz_api_key(user_id, db)
     if not base_url or not api_key:
-        return []
+        return [], None
     try:
         with httpx.Client(timeout=8.0) as client:
             res = client.get(
@@ -115,11 +117,11 @@ def list_native_integrations(user_id: str, db: Session) -> List[Dict[str, Any]]:
             )
         if res.status_code >= 400:
             logger.warning("[SOCIAL] Postiz list integrations failed (%s)", res.status_code)
-            return []
+            return [], "Could not verify TikTok and YouTube accounts. Try again."
         payload = res.json() if res.text.strip() else []
     except Exception as exc:
         logger.warning("[SOCIAL] Postiz list integrations failed: %s", exc)
-        return []
+        return [], "Could not verify TikTok and YouTube accounts. Try again."
 
     rows: List[Dict[str, Any]] = []
     for row in normalize_postiz_integrations_list(payload):
@@ -143,6 +145,12 @@ def list_native_integrations(user_id: str, db: Session) -> List[Dict[str, Any]]:
                 "provider": "postiz",
             }
         )
+    return rows, None
+
+
+def list_native_integrations(user_id: str, db: Session) -> List[Dict[str, Any]]:
+    """Connected TikTok and YouTube accounts from Postiz."""
+    rows, _error = list_native_integrations_checked(user_id, db)
     return rows
 
 
