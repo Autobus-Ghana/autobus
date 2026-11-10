@@ -40,8 +40,13 @@ def list_billings(
     db: Session = Depends(get_db),
     authjwt: AuthJWT = Depends(validate_token),
 ):
+    user = UserService(db).get_current_user(authjwt.get_jwt_subject())
     billing_service = BillingService(db)
-    return billing_service.list_billings(page=page, size=size)
+    return billing_service.list_billings(
+        page=page,
+        size=size,
+        created_by_user_id=user.id,
+    )
 
 
 @billing_routes.get("/public/{reference}", response_model=BillingResponse)

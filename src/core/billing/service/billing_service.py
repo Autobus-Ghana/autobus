@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import desc
+from sqlalchemy import and_, desc, or_
 from sqlalchemy.orm import Session
 
 from core.billing.dto.request.billing_create import BillingCreateRequest
@@ -17,7 +17,8 @@ from core.billing.exceptions.billing_exceptions import (
     BillingNotFoundException,
     BillingValidationException,
 )
-from core.billing.model.billing_charge import BillingCharge, BillingChargeStatus
+from core.billing.model.billing_charge import BillingCharge, BillingChargeStatus, BillingSourceType
+from core.orders.model.order import Order
 from core.billing.service.paystack_checkout_client import PaystackCheckoutClient
 
 logger = logging.getLogger(__name__)
@@ -161,8 +162,23 @@ class BillingService:
             )
         return BillingResponse.from_charge(charge)
 
-    def list_billings(self, page: int, size: int) -> BillingPaginatedResponse:
-        query = self.db.query(BillingCharge)
+    def list_billings(
+        self,
+        page: int,
+        size: int,
+        created_by_user_id: Optional[str] = None,
+    ) -> BillingPaginatedResponse:
+        owner_id = (created_by_user_id or "").strip()
+        if not owner_id:
+            return BillingPaginatedResponse(
+                items=[],
+                total=0,
+                page=page,
+                size=size,
+                has_next=False,
+                has_prev=page > 0,
+            )
+        query = self.db.query(BillingCharge).filter(self._owned_by_merchant(owner_id))
         total = query.count()
         charges = (
             query.order_by(desc(BillingCharge.created_on))
@@ -178,6 +194,24 @@ class BillingService:
             has_next=(page + 1) * size < total,
             has_prev=page > 0,
         )
+
+    def _owned_by_merchant(self, user_id: str):
+        """Charges this merchant created, plus order invoices for their orders."""
+        owned_order_ids = [
+            str(order_id)
+            for (order_id,) in self.db.query(Order.order_id)
+            .filter(Order.user_id == user_id)
+            .all()
+        ]
+        filters = [BillingCharge.created_by_user_id == user_id]
+        if owned_order_ids:
+            filters.append(
+                and_(
+                    BillingCharge.source_type == BillingSourceType.ORDER,
+                    BillingCharge.external_id.in_(owned_order_ids),
+                )
+            )
+        return or_(*filters)
 
     async def verify_and_sync(self, reference: str) -> BillingResponse:
         charge = (
