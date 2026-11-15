@@ -340,6 +340,47 @@ def catalog_items_from_products(products: Iterable[Any]) -> List[CatalogItem]:
     return items
 
 
+def product_group_name(name: str) -> str:
+    """Collapse variation rows (Name · Color · Size) into a parent product title."""
+    text = (name or "").strip()
+    if " · " in text:
+        return text.split(" · ", 1)[0].strip() or text
+    return text
+
+
+def group_catalog_items(catalog: Sequence[CatalogItem]) -> List[CatalogItem]:
+    """One row per parent product: min price and total ready stock across variants."""
+    buckets: Dict[str, List[CatalogItem]] = {}
+    for item in catalog or []:
+        key = product_group_name(item.name)
+        buckets.setdefault(key, []).append(item)
+    grouped: List[CatalogItem] = []
+    for key, rows in buckets.items():
+        prices = []
+        for row in rows:
+            if row.price is None:
+                continue
+            try:
+                prices.append(float(row.price))
+            except (TypeError, ValueError):
+                continue
+        stocks = [row.stock for row in rows if row.stock is not None]
+        stock_total = sum(stocks) if stocks else None
+        if stocks and all(s <= 0 for s in stocks):
+            stock_total = 0
+        grouped.append(
+            CatalogItem(
+                product_id=rows[0].product_id,
+                name=key if len(rows) == 1 else f"{key} ({len(rows)} options)",
+                price=str(min(prices)) if prices else rows[0].price,
+                stock=stock_total,
+                category=rows[0].category,
+                description=rows[0].description,
+            )
+        )
+    return grouped
+
+
 def format_customer_catalog(
     catalog: Sequence[CatalogItem],
     *,
@@ -350,17 +391,19 @@ def format_customer_catalog(
 
     if not catalog:
         return "We don't have anything listed just yet. Tell me what you're after and I'll check with the shop."
-    ordered = sorted(catalog, key=lambda item: (not item.in_stock, item.name.lower()))
+    # Size/color rows are collapsed so customers see products, not every SKU.
+    collapsed = group_catalog_items(catalog)
+    ordered = sorted(collapsed, key=lambda item: (not item.in_stock, item.name.lower()))
     lines = [heading or "Here's what we've got right now:"]
-    for index, item in enumerate(ordered[:30], 1):
+    for index, item in enumerate(ordered[:12], 1):
         bits = [f"{index}. {item.name}"]
         if item.price is not None:
-            bits.append(format_money(item.price, currency))
+            bits.append(f"from {format_money(item.price, currency)}")
         bits.append(_stock_phrase(item.stock))
         lines.append(" — ".join(bits))
-    if len(ordered) > 30:
-        lines.append(f"...and {len(ordered) - 30} more.")
-    lines.append("Tell me which one you want and how many, and I'll set it aside.")
+    if len(ordered) > 12:
+        lines.append(f"...and {len(ordered) - 12} more styles.")
+    lines.append("Pick a product card below (or tell me the name, size, and how many).")
     return "\n".join(lines)
 
 

@@ -101,7 +101,21 @@ class ExistingOrderQuestionTests(unittest.TestCase):
 
         text = format_customer_catalog([_item("Naa")])
         self.assertIn("Here's what we've got", text)
-        self.assertIn("how many", text.lower())
+        self.assertIn("product card", text.lower())
+
+    def test_catalog_groups_variation_rows(self):
+        from core.nlu.service.customer_shop import format_customer_catalog
+
+        text = format_customer_catalog(
+            [
+                _item("Belle · Black · 37", "1"),
+                _item("Belle · Black · 38", "2"),
+                _item("Emlet · coffee · 40", "3"),
+            ]
+        )
+        self.assertIn("Belle (2 options)", text)
+        self.assertIn("Emlet", text)
+        self.assertNotIn("Black · 37", text)
 
 
 class LocationAndDeliveryAreNotProductsTests(unittest.TestCase):

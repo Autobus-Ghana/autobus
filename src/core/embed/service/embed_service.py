@@ -385,19 +385,70 @@ class EmbedService:
         sub_business_id: str = "",
         catalog_mode: str = "managed",
     ) -> List[Dict[str, Any]]:
+        from core.nlu.service.customer_shop import product_group_name
+
         query = self.db.query(Product).filter(Product.user_id == user_id)
         if (catalog_mode or "managed") == "synced":
             query = query.filter(Product.external_id.isnot(None))
-        products = query.limit(100).all()
+        products = query.limit(200).all()
         products = for_sub_business(products, sub_business_id)
         active = [p for p in products if getattr(p, "is_active", True) is not False]
         if intent == "view_products":
-            return [self._product_card(p, currency) for p in active[:30]]
+            return self._grouped_product_cards(active, currency)[:12]
         if intent in CUSTOMER_SHOP_INTENTS or intent == "view_product":
             reply_l = (reply or "").lower()
             matched = [p for p in active if (p.name or "").lower() in reply_l]
-            return [self._product_card(p, currency) for p in matched[:12]]
+            if not matched:
+                # Match parent title in reply (e.g. "Belle" hits all Belle · Size rows).
+                matched = [
+                    p
+                    for p in active
+                    if product_group_name(p.name or "").lower() in reply_l
+                    or any(
+                        token and token in (p.name or "").lower()
+                        for token in reply_l.replace(",", " ").split()
+                        if len(token) > 2
+                    )
+                ]
+            return self._grouped_product_cards(matched or active[:40], currency)[:12]
         return []
+
+    def _grouped_product_cards(self, products: List[Product], currency: str = "GHS") -> List[Dict[str, Any]]:
+        """Collapse size/color SKUs into parent cards with selectable variants for the chat UI."""
+        from collections import OrderedDict
+
+        from core.nlu.service.customer_shop import product_group_name
+
+        buckets: "OrderedDict[str, List[Product]]" = OrderedDict()
+        for product in products or []:
+            key = product_group_name(product.name or "") or (product.name or "Product")
+            buckets.setdefault(key, []).append(product)
+
+        cards: List[Dict[str, Any]] = []
+        for key, rows in buckets.items():
+            variants = [self._product_card(p, currency) for p in rows]
+            prices = []
+            for card in variants:
+                try:
+                    prices.append(float(card.get("price") or 0))
+                except (TypeError, ValueError):
+                    continue
+            stocks = [c.get("stock") for c in variants if c.get("stock") is not None]
+            image = next((c.get("image_url") for c in variants if c.get("image_url")), "") or ""
+            cards.append(
+                {
+                    "name": key,
+                    "price": f"{min(prices):.2f}" if prices else (variants[0].get("price") if variants else "0"),
+                    "currency": currency,
+                    "stock": sum(int(s) for s in stocks) if stocks else None,
+                    "image_url": image,
+                    "external_id": variants[0].get("external_id") if len(variants) == 1 else "",
+                    "product_id": variants[0].get("product_id") if variants else "",
+                    "link": variants[0].get("link") if len(variants) == 1 else "",
+                    "variants": variants,
+                }
+            )
+        return cards
 
     def _upsert_one(self, user_id: str, item: Dict[str, Any], sub_business_id: str = "") -> Product:
         external_id = str(item.get("external_id") or "").strip()
@@ -495,16 +546,21 @@ class EmbedService:
         items = catalog_items_from_products([product])
         stock = items[0].stock if items else product.number_in_stock
         from core.cloudstorage.service.storageservice import refresh_public_object_url
+        from core.nlu.service.customer_shop import product_group_name
 
         photo = refresh_public_object_url(product.photo or "")
         if photo and "placeholder" in photo.lower():
             photo = ""
+        full_name = product.name or ""
+        parent = product_group_name(full_name)
+        option = full_name[len(parent) :].lstrip(" ·-") if parent and full_name.startswith(parent) else ""
         return {
             "external_id": product.external_id or "",
             "sub_business_id": product.sub_business_id or "",
             "product_id": str(product.product_id),
             "kind": product.kind or "product",
-            "name": product.name,
+            "name": full_name,
+            "option": option or full_name,
             "description": product.description or "",
             "price": str(product.price),
             "currency": currency,
@@ -512,6 +568,7 @@ class EmbedService:
             "active": bool(product.is_active),
             "category": product.category or "",
             "image_url": photo,
+            "link": product.link or "",
         }
 
     def _order_card(self, order: Order, external_customer_id: Optional[str] = None) -> Dict[str, Any]:
