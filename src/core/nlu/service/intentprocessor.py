@@ -982,9 +982,8 @@ class IntentProcessor:
                 return self._handle_view_products(
                     user_id,
                     {**(slots or {}), "category": cat},
-                    product_service,
-                    user_data,
-                    user_message,
+                    user_data=user_data,
+                    user_message=user_message,
                 )
             return unavailable_subject_reply(str(product_name or "that"), catalog)
         product = self._find_product(product_service, slots, user_id=owner_id)
@@ -1006,9 +1005,8 @@ class IntentProcessor:
                     return self._handle_view_products(
                         user_id,
                         {**(slots or {}), "category": cat},
-                        product_service,
-                        user_data,
-                        user_message,
+                        user_data=user_data,
+                        user_message=user_message,
                     )
                 resolved = resolve_catalog_query(str(product_name), catalog)
                 if resolved:
@@ -1049,9 +1047,8 @@ class IntentProcessor:
                     return self._handle_view_products(
                         user_id,
                         {**(slots or {}), "category": cat},
-                        product_service,
-                        user_data,
-                        user_message,
+                        user_data=user_data,
+                        user_message=user_message,
                     )
                 return unavailable_subject_reply(str(label), catalog)
             if product_id:
