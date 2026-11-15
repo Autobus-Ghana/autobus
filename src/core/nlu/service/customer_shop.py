@@ -440,6 +440,35 @@ def match_category_query(query: str, catalog: Sequence[CatalogItem]) -> Optional
     return None
 
 
+def unavailable_subject_reply(subject: str, catalog: Sequence[CatalogItem]) -> str:
+    """Short refuse when the shopper asked for something the store does not list."""
+    label = (subject or "").strip() or "that"
+    cats = catalog_categories(catalog)
+    if cats:
+        return (
+            f"We don't have {label} available right now. "
+            f"We sell: {', '.join(cats[:8])}. Tell me which you'd like to see."
+        )
+    return f"We don't have {label} available right now."
+
+
+def reply_refuses_catalog(reply: str) -> bool:
+    """True when the assistant told the shopper the ask is unavailable."""
+    text = (reply or "").strip().lower()
+    if not text:
+        return False
+    markers = (
+        "don't have",
+        "do not have",
+        "we don't have",
+        "not available right now",
+        "isn't available",
+        "is not available",
+        "on the shelf right now",
+    )
+    return any(m in text for m in markers)
+
+
 def filter_catalog_by_category(catalog: Sequence[CatalogItem], category: str) -> List[CatalogItem]:
     cat_l = (category or "").strip().lower()
     if not cat_l:

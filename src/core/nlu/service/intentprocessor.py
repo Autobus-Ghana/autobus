@@ -25,6 +25,7 @@ from core.nlu.service.customer_shop import (
     match_category_query,
     mentioned_size,
     resolve_catalog_query,
+    unavailable_subject_reply,
 )
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
 from core.nlu.service.datapipe.user_rag import UserRAGManager
@@ -863,6 +864,7 @@ class IntentProcessor:
                 match_catalog_in_text,
                 product_group_name,
                 resolve_catalog_query,
+                unavailable_subject_reply,
             )
 
             # Prefer an explicit slot; otherwise see if they asked for a known category.
@@ -871,13 +873,7 @@ class IntentProcessor:
             if asked_category:
                 filtered = filter_catalog_by_category(catalog, asked_category)
                 if not filtered:
-                    cats = sorted({(c.category or "").strip() for c in catalog if (c.category or "").strip()})
-                    if cats:
-                        return (
-                            f"We don't have {asked_category} right now. "
-                            f"We do have: {', '.join(cats[:8])}."
-                        )
-                    return f"We don't have {asked_category} available right now."
+                    return unavailable_subject_reply(asked_category, catalog)
                 catalog = filtered
                 products = [
                     p
@@ -905,16 +901,8 @@ class IntentProcessor:
                     ids = {item.product_id for item in named}
                     products = [p for p in products if str(p.product_id) in ids]
                 else:
-                    cats = sorted(
-                        {(c.category or "").strip() for c in catalog if (c.category or "").strip()}
-                    )
-                    if cats:
-                        return (
-                            f"We don't have {subject} available right now. "
-                            f"We sell: {', '.join(cats[:8])}."
-                        )
-                    # Categories not synced — still show the catalogue for a browse question.
-                    # (Name filter found nothing, but the shopper is asking what's on offer.)
+                    # Not in the store's categories / names — refuse without dumping the catalogue.
+                    return unavailable_subject_reply(subject, catalog)
             elif (
                 (user_message or "").strip()
                 and not looks_like_catalog_browse(user_message)
@@ -1029,16 +1017,7 @@ class IntentProcessor:
             label = product_name or product_id or "that product"
             if is_customer:
                 owned = self._owned_products(product_service, owner_id, user_id, limit=50)
-                self._queue_product_images(owned, product_service, per_product=1, total_limit=4)
-                listing = format_customer_catalog(
-                    catalog_items_from_products(owned),
-                    currency=self._catalog_currency(user_data),
-                )
-                return self._append_size_note(
-                    f'I don\'t have "{label}" on the shelf right now.\n\n{listing}',
-                    user_message,
-                    owned,
-                )
+                return unavailable_subject_reply(str(label), catalog_items_from_products(owned))
             if product_id:
                 return f"❌ Product '{product_id}' not found"
             return "❌ Product ID, inventory ID, or product name is required"
@@ -1292,13 +1271,9 @@ class IntentProcessor:
                         "I don't have the store catalogue loaded yet. "
                         "Ask the shop to sync products from GreenMall, or browse the website directly."
                     )
-                listing = format_customer_catalog(
+                return unavailable_subject_reply(
+                    str(item_name or "that"),
                     catalog_items_from_products(owned),
-                    currency=self._catalog_currency(user_data),
-                )
-                return (
-                    f'I don\'t have "{item_name}" on the shelf right now.\n\n'
-                    f"{listing}"
                 )
             stock = getattr(matched_product, "number_in_stock", None)
             if stock is not None and int(stock) <= 0:

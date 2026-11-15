@@ -103,6 +103,20 @@ class ExistingOrderQuestionTests(unittest.TestCase):
         self.assertIn("tap a product card", text.lower())
         self.assertIn("Naa", text)
 
+    def test_unavailable_subject_lists_categories_without_dumping_catalog(self):
+        from core.nlu.service.customer_shop import CatalogItem, reply_refuses_catalog, unavailable_subject_reply
+
+        catalog = [
+            CatalogItem(product_id="1", name="Ace", price="100", stock=2, category="Heels"),
+            CatalogItem(product_id="2", name="Mira", price="80", stock=1, category="Flats"),
+        ]
+        text = unavailable_subject_reply("laptops", catalog)
+        self.assertIn("don't have laptops", text.lower())
+        self.assertIn("Heels", text)
+        self.assertIn("Flats", text)
+        self.assertNotIn("Ace", text)
+        self.assertTrue(reply_refuses_catalog(text))
+
     def test_catalog_groups_variation_rows(self):
         from core.nlu.service.customer_shop import format_customer_catalog
 

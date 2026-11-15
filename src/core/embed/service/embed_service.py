@@ -247,12 +247,17 @@ class EmbedService:
                 )
 
         # Prefer the exact SKUs the shop handler listed; fall back to intent-based lookup.
+        # Never attach cards when the assistant refused an unavailable ask.
+        from core.nlu.service.customer_shop import reply_refuses_catalog
+
         turn_intent = (
             getattr(state, "current_intent", "")
             or getattr(state, "last_completed_intent", "")
             or ""
         )
-        if listed_ids:
+        if reply_refuses_catalog(reply):
+            products = []
+        elif listed_ids:
             products = self._cards_for_product_ids(
                 row.user_id,
                 listed_ids,
@@ -425,7 +430,10 @@ class EmbedService:
                         if len(token) > 2
                     )
                 ]
-            return self._grouped_product_cards(matched or active[:40], currency)[:12]
+            # Only attach cards for products actually mentioned — never dump the whole shelf.
+            if not matched:
+                return []
+            return self._grouped_product_cards(matched, currency)[:12]
         return []
 
     def _grouped_product_cards(self, products: List[Product], currency: str = "GHS") -> List[Dict[str, Any]]:
