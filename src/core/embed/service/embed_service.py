@@ -285,6 +285,8 @@ class EmbedService:
         for action in actions:
             if action.get("type") == "order.created":
                 self.deliver(row, "order.created", action.get("order") or action)
+            elif action.get("type") == "checkout.handoff":
+                self.deliver(row, "checkout.handoff", action.get("checkout") or action)
             elif action.get("type") == "conversation.handoff":
                 self.deliver(row, "conversation.handoff", action)
         return response

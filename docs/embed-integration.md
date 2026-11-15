@@ -1,6 +1,9 @@
 # Embedded chat
 
-Autobus answers your customers and places orders. Your software owns the screen. You send each message to Autobus and show the reply. When an order is placed, Autobus also calls a webhook on your server so you can fulfill it.
+Autobus answers your customers from the live catalog. Your software owns the screen. You send each message to Autobus and show the reply.
+
+- **Managed catalog:** Autobus can place the order and webhook `order.created` so you can fulfill it.
+- **Synced catalog (external store):** Autobus matches the product and stock, then returns a **checkout link** (`checkout.handoff`). Payment and the order stay in your software (for example GreenMall). Autobus does not create an Autobus order.
 
 Base URL: `https://<your-autobus-host>/api/v1/embed`
 
@@ -17,17 +20,23 @@ sequenceDiagram
     YourApp->>Autobus: PUT /catalog (only if catalog mode is synced)
     Customer->>YourApp: "I want 2 bags of rice"
     YourApp->>Autobus: POST /messages
-    Autobus->>Autobus: Match the live catalog and place the order
-    Autobus-->>YourApp: Reply text, product cards, actions
-    YourApp-->>Customer: Show the reply
-    Autobus->>YourApp: POST webhook order.created
+    alt catalog synced
+        Autobus->>Autobus: Match catalog and stock
+        Autobus-->>YourApp: Reply plus checkout.handoff link
+        YourApp-->>Customer: Show reply and Complete checkout
+        Customer->>YourApp: Pay on your checkout
+    else catalog managed
+        Autobus->>Autobus: Place Autobus order
+        Autobus-->>YourApp: Reply plus order.created
+        Autobus->>YourApp: POST webhook order.created
+    end
 ```
 
 | Direction | Who starts it | What it is for |
 | --- | --- | --- |
 | Chat | Your software | One customer message in, one reply out |
 | Catalog sync | Your software | Push inventory Autobus is allowed to sell |
-| Webhook | Autobus | Tell you an order was placed, updated, or a person was requested |
+| Webhook | Autobus | `order.created` / `order.updated` (managed), `checkout.handoff` (synced), or handoff to a person |
 
 ## 1. Turn it on in the portal
 
@@ -36,9 +45,9 @@ On the Autobus **web portal**, open **Business Manager → Embedded chat**. The 
 Questions about the business (hours, policies, how you work) are answered from memory you train under **AI Intelligence** on that same web portal. The chat API does not take a dump of business facts on each message. Product prices and stock come from the catalog.
 
 1. Choose a catalog mode.
-   - **Managed in Autobus.** Products are entered in the portal. Skip catalog sync.
-   - **Synced from your software.** Your system is the source of truth. Push items with `PUT /catalog`.
-2. Paste the HTTPS URL that should receive order events, then save.
+   - **Managed in Autobus.** Products are entered in the portal. Skip catalog sync. Autobus places orders.
+   - **Synced from your software.** Your system is the source of truth. Push items with `PUT /catalog` (include a `link` checkout URL on each item). Autobus hands customers that link instead of placing an Autobus order.
+2. Paste the HTTPS URL that should receive events (`order.*`, `checkout.handoff`, handoff), then save.
 3. Issue an API key. The full key is shown once. Store it as a secret. The portal keeps only a hash.
 4. Turn embedded chat on.
 
@@ -222,8 +231,23 @@ Autobus `POST`s to the URL you saved. The body is JSON:
 
 | Header | Meaning |
 | --- | --- |
-| `X-Autobus-Event` | `order.created`, `order.updated`, `conversation.handoff`, or `catalog.sync_failed` |
+| `X-Autobus-Event` | `order.created`, `order.updated`, `checkout.handoff`, `conversation.handoff`, or `catalog.sync_failed` |
 | `X-Autobus-Signature` | `sha256=` plus HMAC-SHA256 of the raw body, using your webhook secret |
+
+For `checkout.handoff`, `data` looks like:
+
+```json
+{
+  "external_id": "SKU-RICE-5",
+  "name": "Rice Bag 5kg",
+  "quantity": 2,
+  "unit_price": "75.00",
+  "currency": "GHS",
+  "checkout_url": "https://shop.example.com/buy?v=…&qty=2"
+}
+```
+
+Show `checkout_url` to the customer (button or link). Do not create an Autobus order.
 
 Verify the signature against the raw bytes before you parse JSON. Reject anything that does not match.
 
@@ -270,7 +294,10 @@ POST /api/v1/embed/messages
 Authorization: Bearer ab_live_...
 ```
 
-Store `message.id` before you call, so a timeout retry is safe. If `actions` contains `order.created`, record `order.order_number` and `items[].external_id` in your system, then fulfill. When payment completes, `POST` the order update.
+Store `message.id` before you call, so a timeout retry is safe.
+
+- **Managed:** If `actions` contains `order.created`, record `order.order_number` and `items[].external_id`, then fulfill. When payment completes, `POST` the order update.
+- **Synced:** If `actions` contains `checkout.handoff`, open `checkout.checkout_url` so the customer pays on your store. Autobus does not create an order.
 
 ## GreenMall
 
@@ -278,8 +305,6 @@ Store `message.id` before you call, so a timeout retry is safe. If `actions` con
 
 1. Shows a webhook URL to paste into Autobus Embedded chat (catalog mode **Synced**).
 2. Stores the embed API key and webhook secret.
-3. Pushes the store’s published catalog with `PUT /catalog` (variation id as `external_id`).
-4. Creates a GreenMall (or GreenPOS) order when it receives `order.created`.
-5. Calls `POST /orders/{order_number}` when the merchant updates fulfillment.
-
-No Autobus code changes are required beyond issuing a key and setting catalog mode to synced.
+3. Pushes the store’s published catalog with `PUT /catalog` (`external_id` plus a `/buy?…` checkout `link`).
+4. When Autobus matches a product, it returns `checkout.handoff`; the storefront chat shows **Complete checkout**, which opens GreenMall `/buy` (seeds the bag and goes to checkout for GreenPOS-linked stores).
+5. Payment and order records stay on GreenMall / GreenPOS. Autobus does not place a parallel Autobus order.

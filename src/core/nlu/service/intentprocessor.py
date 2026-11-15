@@ -1021,6 +1021,87 @@ class IntentProcessor:
                 return "Sorry, I couldn't check that order just now. Please try again in a moment."
             return f"❌ Error processing order: {str(e)[:100]}"
 
+    @staticmethod
+    def _checkout_url_with_qty(link: str, quantity: int) -> str:
+        """Append qty to a partner checkout/product link without duplicating the param."""
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        base = (link or "").strip()
+        if not base or quantity <= 0:
+            return base
+        parts = urlsplit(base)
+        query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "qty"]
+        query.append(("qty", str(quantity)))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+    def _external_catalog_checkout_handoff(
+        self,
+        *,
+        matched_product: Any,
+        line_quantity: int,
+        unit_price: Decimal,
+        currency: str,
+        turn: Optional[Dict[str, Any]],
+        metadata: Dict[str, Any],
+        catalog: List[Any],
+    ) -> str:
+        """Synced catalogue: confirm stock and send a partner checkout link instead of an Autobus order."""
+        from core.embed.turn_context import record_embed_action
+
+        name = matched_product.name
+        stock = getattr(matched_product, "number_in_stock", None)
+        if stock is not None and int(stock) < line_quantity:
+            listing = format_customer_catalog(
+                catalog_items_from_products(catalog),
+                currency=currency,
+            )
+            if int(stock) <= 0:
+                return f"{name} just sold out. Here's what we still have:\n\n{listing}"
+            return (
+                f"I only have {int(stock)} of {name} left. "
+                f"Want a smaller quantity, or something else?\n\n{listing}"
+            )
+
+        link = (getattr(matched_product, "link", None) or "").strip()
+        checkout_url = self._checkout_url_with_qty(link, line_quantity) if link else ""
+        price_bit = ""
+        if unit_price and unit_price > 0:
+            price_bit = f" at {currency} {unit_price} each"
+
+        if turn:
+            record_embed_action(
+                {
+                    "type": "checkout.handoff",
+                    "checkout": {
+                        "external_id": getattr(matched_product, "external_id", None) or metadata.get("external_id") or "",
+                        "name": name,
+                        "quantity": line_quantity,
+                        "unit_price": str(unit_price),
+                        "currency": currency,
+                        "checkout_url": checkout_url,
+                        "conversation_id": metadata.get("conversation_id") or "",
+                        "external_customer_id": metadata.get("external_customer_id") or "",
+                        "sub_business": {
+                            "external_id": metadata.get("sub_business_id") or "",
+                            "name": metadata.get("sub_business_name") or "",
+                        }
+                        if metadata.get("sub_business_id")
+                        else None,
+                    },
+                }
+            )
+
+        if checkout_url:
+            return (
+                f"Great — {line_quantity} x {name}{price_bit} is available. "
+                f"Finish checkout and payment here (Autobus does not take the payment): "
+                f"{checkout_url}"
+            )
+        return (
+            f"{line_quantity} x {name}{price_bit} is available on the store website. "
+            f"Please finish checkout there — I can't take payment in this chat when the catalogue is synced."
+        )
+
     def _handle_create_order(
         self,
         user_id: str,
@@ -1153,6 +1234,27 @@ class IntentProcessor:
                 metadata["sub_business_name"] = turn.get("sub_business_name") or ""
             if matched_product is not None and getattr(matched_product, "external_id", None):
                 metadata["external_id"] = matched_product.external_id
+
+        # Synced external catalogue: Autobus matches stock, then hands the customer a checkout link.
+        # Payment and the order record stay on the partner store (e.g. GreenMall).
+        if matched_product is not None:
+            from core.embed.model.embed import EmbedIntegration
+
+            embed_row = (
+                db.query(EmbedIntegration)
+                .filter(EmbedIntegration.user_id == owner_id)
+                .first()
+            )
+            if embed_row and (embed_row.catalog_mode or "managed") == "synced":
+                return self._external_catalog_checkout_handoff(
+                    matched_product=matched_product,
+                    line_quantity=line_quantity,
+                    unit_price=unit_price,
+                    currency=self._catalog_currency(user_data),
+                    turn=turn,
+                    metadata=metadata,
+                    catalog=_owned(50),
+                )
 
         try:
             order_data = OrderCreateDTO(
