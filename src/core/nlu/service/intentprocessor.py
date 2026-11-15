@@ -976,12 +976,17 @@ class IntentProcessor:
         )
         if unclear_subject:
             owned = self._owned_products(product_service, owner_id, user_id, limit=50)
-            self._queue_product_images(owned, product_service, per_product=1, total_limit=4)
-            listing = format_customer_catalog(
-                catalog_items_from_products(owned),
-                currency=self._catalog_currency(user_data),
-            )
-            return f"Which one are you asking about?\n\n{listing}"
+            catalog = catalog_items_from_products(owned)
+            cat = match_category_query(str(product_name or user_message or ""), catalog)
+            if cat:
+                return self._handle_view_products(
+                    user_id,
+                    {**(slots or {}), "category": cat},
+                    product_service,
+                    user_data,
+                    user_message,
+                )
+            return unavailable_subject_reply(str(product_name or "that"), catalog)
         product = self._find_product(product_service, slots, user_id=owner_id)
         if is_customer and product and (self._embed_catalog_mode(owner_id) or "managed") == "synced":
             if not getattr(product, "external_id", None):
@@ -993,16 +998,35 @@ class IntentProcessor:
             if not matches:
                 owned = self._owned_products(product_service, owner_id, user_id, limit=100)
                 catalog = catalog_items_from_products(owned)
+                # "what heels do you have" often lands here as view_product — treat as category browse.
+                cat = match_category_query(str(product_name), catalog) or match_category_query(
+                    user_message or "", catalog
+                )
+                if cat:
+                    return self._handle_view_products(
+                        user_id,
+                        {**(slots or {}), "category": cat},
+                        product_service,
+                        user_data,
+                        user_message,
+                    )
                 resolved = resolve_catalog_query(str(product_name), catalog)
                 if resolved:
                     ids = {item.product_id for item in resolved}
                     matches = [item for item in owned if str(item.product_id) in ids]
             if len(matches) > 1:
                 heading = "I found a few matches. Which one did you mean?"
+                try:
+                    from core.embed.turn_context import record_embed_product_ids
+
+                    record_embed_product_ids([str(getattr(p, "product_id", "") or "") for p in matches])
+                except Exception:
+                    pass
                 return format_customer_catalog(
                     catalog_items_from_products(matches),
                     heading=heading,
                     currency=self._catalog_currency(user_data),
+                    for_cards=True,
                 ) if is_customer else (
                     heading
                     + "\n"
@@ -1017,7 +1041,19 @@ class IntentProcessor:
             label = product_name or product_id or "that product"
             if is_customer:
                 owned = self._owned_products(product_service, owner_id, user_id, limit=50)
-                return unavailable_subject_reply(str(label), catalog_items_from_products(owned))
+                catalog = catalog_items_from_products(owned)
+                cat = match_category_query(str(label), catalog) or match_category_query(
+                    user_message or "", catalog
+                )
+                if cat:
+                    return self._handle_view_products(
+                        user_id,
+                        {**(slots or {}), "category": cat},
+                        product_service,
+                        user_data,
+                        user_message,
+                    )
+                return unavailable_subject_reply(str(label), catalog)
             if product_id:
                 return f"❌ Product '{product_id}' not found"
             return "❌ Product ID, inventory ID, or product name is required"
