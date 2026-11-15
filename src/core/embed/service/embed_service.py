@@ -514,6 +514,9 @@ class EmbedService:
             "source": "embed" if metadata.get("channel") == "embed" else (order.order_source or "chat"),
             "external_customer_id": external_customer_id or metadata.get("external_customer_id") or "",
             "conversation_id": metadata.get("conversation_id") or "",
+            "customer_name": order.customer_name or "",
+            "customer_phone": order.customer_phone or "",
+            "customer_email": order.customer_email or "",
             "sub_business": {
                 "external_id": metadata.get("sub_business_id") or "",
                 "name": metadata.get("sub_business_name") or "",

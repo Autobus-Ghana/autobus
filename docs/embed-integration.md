@@ -179,6 +179,9 @@ Response:
         "source": "embed",
         "external_customer_id": "cust_8841",
         "conversation_id": "thread_441",
+        "customer_name": "Ama Mensah",
+        "customer_phone": "+233201234567",
+        "customer_email": "ama@example.com",
         "items": [
           {
             "external_id": "SKU-RICE-5",
@@ -268,3 +271,15 @@ Authorization: Bearer ab_live_...
 ```
 
 Store `message.id` before you call, so a timeout retry is safe. If `actions` contains `order.created`, record `order.order_number` and `items[].external_id` in your system, then fulfill. When payment completes, `POST` the order update.
+
+## GreenMall
+
+[GreenMall](https://usegreenmall.com) store owners connect Autobus from **Store settings → Autobus**. GreenMall:
+
+1. Shows a webhook URL to paste into Autobus Embedded chat (catalog mode **Synced**).
+2. Stores the embed API key and webhook secret.
+3. Pushes the store’s published catalog with `PUT /catalog` (variation id as `external_id`).
+4. Creates a GreenMall (or GreenPOS) order when it receives `order.created`.
+5. Calls `POST /orders/{order_number}` when the merchant updates fulfillment.
+
+No Autobus code changes are required beyond issuing a key and setting catalog mode to synced.
