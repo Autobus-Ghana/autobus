@@ -18,9 +18,11 @@ from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES, VENDOR_EXCLUSION
 from core.nlu.service.slot_manager import is_placeholder_order_item_name
 from core.nlu.service.customer_shop import (
     catalog_items_from_products,
+    filter_catalog_by_category,
     format_customer_catalog,
     format_customer_product,
     is_clear_product_subject,
+    match_category_query,
     mentioned_size,
     resolve_catalog_query,
 )
@@ -846,19 +848,98 @@ class IntentProcessor:
             if related_reply:
                 return related_reply
             products = self._owned_products(
-                product_service, owner_id, user_id, limit=50, category=category
+                product_service, owner_id, user_id, limit=200, category=None
             )
             if not products and (self._embed_catalog_mode(owner_id) or "managed") == "synced":
                 return (
                     "I don't have the store catalogue loaded yet. "
                     "Ask the shop to sync products from GreenMall, or browse the website directly."
                 )
+            catalog = catalog_items_from_products(products)
+            from core.nlu.service.customer_shop import (
+                extract_browse_subject,
+                looks_like_catalog_browse,
+                looks_like_generic_stock_inquiry,
+                match_catalog_in_text,
+                product_group_name,
+                resolve_catalog_query,
+            )
+
+            # Prefer an explicit slot; otherwise see if they asked for a known category.
+            asked_category = (category or "").strip() or match_category_query(user_message, catalog)
+            subject = extract_browse_subject(user_message or "")
+            if asked_category:
+                filtered = filter_catalog_by_category(catalog, asked_category)
+                if not filtered:
+                    cats = sorted({(c.category or "").strip() for c in catalog if (c.category or "").strip()})
+                    if cats:
+                        return (
+                            f"We don't have {asked_category} right now. "
+                            f"We do have: {', '.join(cats[:8])}."
+                        )
+                    return f"We don't have {asked_category} available right now."
+                catalog = filtered
+                products = [
+                    p
+                    for p in products
+                    if (getattr(p, "category", None) or "").strip().lower()
+                    == asked_category.strip().lower()
+                ]
+            elif subject and not looks_like_generic_stock_inquiry(user_message, catalog):
+                # Asked for something specific (e.g. handbags) — match category/name or say no.
+                subject_l = subject.lower()
+                named = [
+                    item
+                    for item in catalog
+                    if subject_l in (item.name or "").lower()
+                    or subject_l in product_group_name(item.name).lower()
+                    or product_group_name(item.name).lower() in subject_l
+                    or subject_l.rstrip("s") in (item.name or "").lower()
+                ]
+                if not named:
+                    named = resolve_catalog_query(subject, catalog) or match_catalog_in_text(
+                        user_message, catalog
+                    )
+                if named:
+                    catalog = named
+                    ids = {item.product_id for item in named}
+                    products = [p for p in products if str(p.product_id) in ids]
+                else:
+                    cats = sorted(
+                        {(c.category or "").strip() for c in catalog if (c.category or "").strip()}
+                    )
+                    if cats:
+                        return (
+                            f"We don't have {subject} available right now. "
+                            f"We sell: {', '.join(cats[:8])}."
+                        )
+                    # Categories not synced — still show the catalogue for a browse question.
+                    # (Name filter found nothing, but the shopper is asking what's on offer.)
+            elif (
+                (user_message or "").strip()
+                and not looks_like_catalog_browse(user_message)
+                and not looks_like_generic_stock_inquiry(user_message, catalog)
+                and not match_catalog_in_text(user_message, catalog)
+            ):
+                resolved = resolve_catalog_query(user_message, catalog)
+                if resolved:
+                    catalog = resolved
+                    ids = {item.product_id for item in resolved}
+                    products = [p for p in products if str(p.product_id) in ids]
+
             self._queue_product_images(products, product_service, per_product=1, total_limit=4)
+            try:
+                from core.embed.turn_context import record_embed_product_ids
+
+                record_embed_product_ids([str(getattr(p, "product_id", "") or "") for p in products])
+            except Exception:
+                pass
             heading = str((slots or {}).get("catalog_heading") or "").strip() or None
             listing = format_customer_catalog(
-                catalog_items_from_products(products),
+                catalog,
                 heading=heading,
                 currency=self._catalog_currency(user_data),
+                for_cards=True,
             )
             return self._append_size_note(listing, user_message, products)
         if not products:

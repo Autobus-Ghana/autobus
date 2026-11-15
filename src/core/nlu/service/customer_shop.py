@@ -381,11 +381,78 @@ def group_catalog_items(catalog: Sequence[CatalogItem]) -> List[CatalogItem]:
     return grouped
 
 
+def catalog_categories(catalog: Sequence[CatalogItem]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in catalog or []:
+        cat = (item.category or "").strip()
+        if not cat:
+            continue
+        key = cat.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cat)
+    return out
+
+
+def extract_browse_subject(query: str) -> Optional[str]:
+    """Pull the subject from 'what shoes do you have' → 'shoes'."""
+    q = normalize_shop_text(query)
+    if not q:
+        return None
+    for prefix in (
+        "what ",
+        "which ",
+        "any ",
+        "do you have ",
+        "do you sell ",
+        "have you got ",
+        "show me ",
+        "i want ",
+        "i need ",
+        "looking for ",
+        "got any ",
+    ):
+        if q.startswith(prefix):
+            q = q[len(prefix) :]
+    for suffix in (" do you have", " do you sell", " please", " available", " in stock"):
+        if q.endswith(suffix):
+            q = q[: -len(suffix)]
+    q = q.strip(" ?.!,")
+    if not q or q in {"products", "product", "items", "stuff", "things", "everything", "catalogue", "catalog"}:
+        return None
+    return q
+
+
+def match_category_query(query: str, catalog: Sequence[CatalogItem]) -> Optional[str]:
+    """Return a store category when the shopper asked for that kind of product."""
+    q = extract_browse_subject(query) or normalize_shop_text(query)
+    if not q:
+        return None
+    for cat in catalog_categories(catalog):
+        cat_l = cat.lower()
+        if cat_l == q or cat_l in q or q in cat_l:
+            return cat
+        # light plural/stem match: shoe ↔ shoes
+        if cat_l.rstrip("s") == q.rstrip("s"):
+            return cat
+    return None
+
+
+def filter_catalog_by_category(catalog: Sequence[CatalogItem], category: str) -> List[CatalogItem]:
+    cat_l = (category or "").strip().lower()
+    if not cat_l:
+        return list(catalog or [])
+    return [item for item in (catalog or []) if (item.category or "").strip().lower() == cat_l]
+
+
 def format_customer_catalog(
     catalog: Sequence[CatalogItem],
     *,
     heading: Optional[str] = None,
     currency: Optional[str] = None,
+    for_cards: bool = False,
 ) -> str:
     from core.user.currency import format_money
 
@@ -394,6 +461,16 @@ def format_customer_catalog(
     # Size/color rows are collapsed so customers see products, not every SKU.
     collapsed = group_catalog_items(catalog)
     ordered = sorted(collapsed, key=lambda item: (not item.in_stock, item.name.lower()))
+    # Web/embed shows product cards — keep the spoken reply short.
+    if for_cards:
+        names = [item.name.split(" (")[0] for item in ordered[:8]]
+        if len(ordered) > 8:
+            names.append(f"and {len(ordered) - 8} more")
+        label = ", ".join(names)
+        return (
+            heading
+            or f"I found these: {label}. Tap a product card below to pick your size and add it to your bag."
+        )
     lines = [heading or "Here's what we've got right now:"]
     for index, item in enumerate(ordered[:12], 1):
         bits = [f"{index}. {item.name}"]

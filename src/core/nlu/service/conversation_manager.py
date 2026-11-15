@@ -20,6 +20,8 @@ class ConversationState:
     awaiting_satisfaction: bool = False
     session_db_id: Optional[int] = None
     current_intent: str = ""
+    # Set when a shop intent finishes so embed can still attach product cards after current_intent is cleared.
+    last_completed_intent: str = ""
     collected_slots: Dict = None
     waiting_for_pin: bool = False
     pending_action: Dict = None
@@ -68,6 +70,7 @@ class ConversationState:
             "awaiting_satisfaction": self.awaiting_satisfaction,
             "session_db_id": self.session_db_id,
             "current_intent": self.current_intent,
+            "last_completed_intent": self.last_completed_intent or "",
             "collected_slots": self.collected_slots,
             "waiting_for_pin": self.waiting_for_pin,
             "pending_action": self.pending_action,

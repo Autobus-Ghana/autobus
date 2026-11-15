@@ -1491,6 +1491,8 @@ class AutobusNLUSystem:
             else:
                 self.conversation_manager.clear_collected_slots(user_id)
                 state = self.conversation_manager.get_conversation_state(user_id)
+                # Keep last_completed_intent so embed chat can still attach product cards.
+                state.last_completed_intent = intent or state.current_intent or ""
                 state.current_intent = ""
                 self.conversation_manager._save_conversation_state(state)
         

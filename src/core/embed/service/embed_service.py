@@ -220,15 +220,16 @@ class EmbedService:
             paused = CreditService(self.db).consume_or_pause(
                 row.user_id, CreditType.LLM.value, 1.0, "embed_chat"
             )
+            listed_ids: List[str] = []
             if paused:
                 reply = paused
                 reply_images = []
-                actions = end_embed_turn(tokens)
+                actions, listed_ids = end_embed_turn(tokens)
             else:
                 nlu = get_nlu_system()
                 reply = nlu.process_message(nlu_user_id, text, image_url=image_url or None) or ""
                 reply_images = nlu.take_reply_images()
-                actions = end_embed_turn(tokens)
+                actions, listed_ids = end_embed_turn(tokens)
         except Exception:
             end_embed_turn(tokens)
             raise
@@ -245,14 +246,28 @@ class EmbedService:
                     }
                 )
 
-        products = self._products_for_turn(
-            row.user_id,
-            getattr(state, "current_intent", ""),
-            reply,
-            self._currency(row.user_id),
-            sub["external_id"],
-            catalog_mode=row.catalog_mode or "managed",
+        # Prefer the exact SKUs the shop handler listed; fall back to intent-based lookup.
+        turn_intent = (
+            getattr(state, "current_intent", "")
+            or getattr(state, "last_completed_intent", "")
+            or ""
         )
+        if listed_ids:
+            products = self._cards_for_product_ids(
+                row.user_id,
+                listed_ids,
+                self._currency(row.user_id),
+                sub["external_id"],
+            )
+        else:
+            products = self._products_for_turn(
+                row.user_id,
+                turn_intent,
+                reply,
+                self._currency(row.user_id),
+                sub["external_id"],
+                catalog_mode=row.catalog_mode or "managed",
+            )
         response = {
             "conversation_id": conversation_id or nlu_user_id,
             "reply": {"text": reply, "products": products, "images": reply_images},
@@ -449,6 +464,28 @@ class EmbedService:
                 }
             )
         return cards
+
+    def _cards_for_product_ids(
+        self,
+        user_id: str,
+        product_ids: List[str],
+        currency: str,
+        sub_business_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        if not product_ids:
+            return []
+        wanted = {str(pid) for pid in product_ids if pid}
+        products = (
+            self.db.query(Product)
+            .filter(Product.user_id == user_id, Product.product_id.in_(list(wanted)))
+            .all()
+        )
+        # Preserve handler order.
+        by_id = {str(p.product_id): p for p in products}
+        ordered = [by_id[pid] for pid in product_ids if pid in by_id]
+        ordered = for_sub_business(ordered, sub_business_id)
+        active = [p for p in ordered if getattr(p, "is_active", True) is not False]
+        return self._grouped_product_cards(active, currency)[:12]
 
     def _upsert_one(self, user_id: str, item: Dict[str, Any], sub_business_id: str = "") -> Product:
         external_id = str(item.get("external_id") or "").strip()

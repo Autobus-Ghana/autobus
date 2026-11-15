@@ -99,9 +99,9 @@ class ExistingOrderQuestionTests(unittest.TestCase):
     def test_catalog_copy_invites_a_purchase(self):
         from core.nlu.service.customer_shop import format_customer_catalog
 
-        text = format_customer_catalog([_item("Naa")])
-        self.assertIn("Here's what we've got", text)
-        self.assertIn("product card", text.lower())
+        text = format_customer_catalog([_item("Naa")], for_cards=True)
+        self.assertIn("tap a product card", text.lower())
+        self.assertIn("Naa", text)
 
     def test_catalog_groups_variation_rows(self):
         from core.nlu.service.customer_shop import format_customer_catalog
