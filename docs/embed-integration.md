@@ -3,7 +3,7 @@
 Autobus answers your customers from the live catalog. Your software owns the screen. You send each message to Autobus and show the reply.
 
 - **Managed catalog:** Autobus can place the order and webhook `order.created` so you can fulfill it.
-- **Synced catalog (external store):** Autobus matches the product and stock, then returns a **checkout link** (`checkout.handoff`). Payment and the order stay in your software (for example GreenMall). Autobus does not create an Autobus order.
+- **Synced catalog (external store):** Autobus answers only from partner-synced products, matches stock, asks for quantity when needed, then returns a **checkout link** (`checkout.handoff`). Payment and the order stay in your software (for example GreenMall). Autobus does not create an Autobus order.
 
 Base URL: `https://<your-autobus-host>/api/v1/embed`
 

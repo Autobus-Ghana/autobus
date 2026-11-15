@@ -251,6 +251,7 @@ class EmbedService:
             reply,
             self._currency(row.user_id),
             sub["external_id"],
+            catalog_mode=row.catalog_mode or "managed",
         )
         response = {
             "conversation_id": conversation_id or nlu_user_id,
@@ -375,13 +376,19 @@ class EmbedService:
         code = getattr(user, "currency_code", None) if user else None
         return (code or "GHS").upper()
 
-    def _products_for_turn(self, user_id: str, intent: str, reply: str, currency: str, sub_business_id: str = "") -> List[Dict[str, Any]]:
-        products = (
-            self.db.query(Product)
-            .filter(Product.user_id == user_id)
-            .limit(100)
-            .all()
-        )
+    def _products_for_turn(
+        self,
+        user_id: str,
+        intent: str,
+        reply: str,
+        currency: str,
+        sub_business_id: str = "",
+        catalog_mode: str = "managed",
+    ) -> List[Dict[str, Any]]:
+        query = self.db.query(Product).filter(Product.user_id == user_id)
+        if (catalog_mode or "managed") == "synced":
+            query = query.filter(Product.external_id.isnot(None))
+        products = query.limit(100).all()
         products = for_sub_business(products, sub_business_id)
         active = [p for p in products if getattr(p, "is_active", True) is not False]
         if intent == "view_products":

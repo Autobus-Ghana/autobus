@@ -40,7 +40,8 @@ def test_external_handoff_returns_link_without_creating_order():
         )
 
     assert "https://ama.usegreenmall.com/buy?v=abc&qty=2" in reply
-    assert "Finish checkout" in reply
+    assert "finish checkout there" in reply.lower()
+    assert "can't take payment" in reply.lower()
     assert recorded and recorded[0]["type"] == "checkout.handoff"
     assert recorded[0]["checkout"]["checkout_url"].endswith("qty=2")
 

@@ -848,6 +848,11 @@ class IntentProcessor:
             products = self._owned_products(
                 product_service, owner_id, user_id, limit=50, category=category
             )
+            if not products and (self._embed_catalog_mode(owner_id) or "managed") == "synced":
+                return (
+                    "I don't have the store catalogue loaded yet. "
+                    "Ask the shop to sync products from GreenMall, or browse the website directly."
+                )
             self._queue_product_images(products, product_service, per_product=1, total_limit=4)
             heading = str((slots or {}).get("catalog_heading") or "").strip() or None
             listing = format_customer_catalog(
@@ -909,22 +914,20 @@ class IntentProcessor:
             )
             return f"Which one are you asking about?\n\n{listing}"
         product = self._find_product(product_service, slots, user_id=owner_id)
+        if is_customer and product and (self._embed_catalog_mode(owner_id) or "managed") == "synced":
+            if not getattr(product, "external_id", None):
+                product = None
         if not product and product_name:
             matches = product_service.find_products_for_user(str(product_name), owner_id)
+            if is_customer:
+                matches = self._filter_synced_catalog(matches, owner_id)
             if not matches:
-                catalog = catalog_items_from_products(
-                    product_service.get_products_by_user(owner_id, skip=0, limit=100)
-                )
+                owned = self._owned_products(product_service, owner_id, user_id, limit=100)
+                catalog = catalog_items_from_products(owned)
                 resolved = resolve_catalog_query(str(product_name), catalog)
                 if resolved:
                     ids = {item.product_id for item in resolved}
-                    matches = [
-                        item
-                        for item in product_service.get_products_by_user(
-                            owner_id, skip=0, limit=100
-                        )
-                        if str(item.product_id) in ids
-                    ]
+                    matches = [item for item in owned if str(item.product_id) in ids]
             if len(matches) > 1:
                 heading = "I found a few matches. Which one did you mean?"
                 return format_customer_catalog(
@@ -1093,8 +1096,8 @@ class IntentProcessor:
 
         if checkout_url:
             return (
-                f"Great — {line_quantity} x {name}{price_bit} is available. "
-                f"Finish checkout and payment here (Autobus does not take the payment): "
+                f"{line_quantity} x {name}{price_bit} is available on the store website. "
+                f"Please finish checkout there — I can't take payment in this chat when the catalogue is synced.\n"
                 f"{checkout_url}"
             )
         return (
@@ -1118,6 +1121,10 @@ class IntentProcessor:
             or not quantity
             or is_placeholder_order_item_name(str(item_name))
         ):
+            if is_customer:
+                if not item_name or is_placeholder_order_item_name(str(item_name)):
+                    return "Which product would you like? Tell me the name from the catalogue."
+                return "How many would you like? Reply with a number and I'll open checkout for you."
             missing = []
             if not item_name or is_placeholder_order_item_name(str(item_name)):
                 missing.append("item name")
@@ -1150,10 +1157,11 @@ class IntentProcessor:
         sub_business_id = sub_business_from_session(user_id or "")
 
         def _owned(limit: int = 100):
-            return for_sub_business(
+            scoped = for_sub_business(
                 product_service.get_products_by_user(owner_id, skip=0, limit=limit),
                 sub_business_id,
             )
+            return self._filter_synced_catalog(scoped, owner_id) if is_customer else scoped
 
         if is_customer and not is_clear_product_subject(str(item_name)):
             listing = format_customer_catalog(
@@ -1173,6 +1181,8 @@ class IntentProcessor:
                 product_service.find_products_for_user(str(item_name), owner_id),
                 sub_business_id,
             )
+        if is_customer:
+            matches = self._filter_synced_catalog(matches, owner_id)
         if not matches:
             owned = _owned(100)
             catalog = catalog_items_from_products(owned)
@@ -1195,8 +1205,14 @@ class IntentProcessor:
 
         if is_customer:
             if not matched_product:
+                owned = _owned(50)
+                if not owned and (self._embed_catalog_mode(owner_id) or "managed") == "synced":
+                    return (
+                        "I don't have the store catalogue loaded yet. "
+                        "Ask the shop to sync products from GreenMall, or browse the website directly."
+                    )
                 listing = format_customer_catalog(
-                    catalog_items_from_products(_owned(50)),
+                    catalog_items_from_products(owned),
                     currency=self._catalog_currency(user_data),
                 )
                 return (
@@ -1448,6 +1464,27 @@ class IntentProcessor:
             f"Status: {order.order_status} | Payment: {order.payment_status} | Fulfillment: {order.fulfillment_status}"
         )
 
+    def _embed_catalog_mode(self, owner_id: str) -> str:
+        """Return managed/synced for this merchant's embed integration."""
+        try:
+            from core.embed.model.embed import EmbedIntegration
+
+            db = next(get_db())
+            row = (
+                db.query(EmbedIntegration)
+                .filter(EmbedIntegration.user_id == owner_id)
+                .first()
+            )
+            return (row.catalog_mode if row else None) or "managed"
+        except Exception:
+            return "managed"
+
+    def _filter_synced_catalog(self, products: List[Any], owner_id: str) -> List[Any]:
+        """When catalogue is synced from a partner, only expose partner (external_id) products."""
+        if (self._embed_catalog_mode(owner_id) or "managed") != "synced":
+            return list(products or [])
+        return [p for p in (products or []) if getattr(p, "external_id", None)]
+
     def _owned_products(self, product_service, owner_id: str, user_id: str, limit: int = 100, category: Optional[str] = None):
         from core.embed.scope import for_sub_business, sub_business_from_session
         from core.embed.turn_context import embed_turn
@@ -1459,7 +1496,8 @@ class IntentProcessor:
         if not sub_business_id:
             turn = embed_turn() or {}
             sub_business_id = str(turn.get("sub_business_id") or "")
-        return for_sub_business(products, sub_business_id)
+        scoped = for_sub_business(products, sub_business_id)
+        return self._filter_synced_catalog(scoped, owner_id)
 
     def _public_product_image_urls(self, product, product_service: ProductService, limit: int = 1) -> List[str]:
         from core.cloudstorage.service.storageservice import refresh_public_object_url
