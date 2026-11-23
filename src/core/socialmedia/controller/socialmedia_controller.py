@@ -856,6 +856,12 @@ def _get_storage_service() -> StorageService:
     return _storage_service
 
 
+# Names written by InstagramMediaPrepareService: {uuid4}.jpg or {uuid4}.mp4
+_PUBLIC_MEDIA_FILE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|mp4)$"
+)
+
+
 @social_routes.api_route("/media/public/{file_name}", methods=["GET", "HEAD"])
 async def public_instagram_media(file_name: str, request: Request):
     """
