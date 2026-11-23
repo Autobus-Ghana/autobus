@@ -849,6 +849,9 @@ async def postiz_delete_integration(
         detail="That account is not connected. Link it again from Marketing.",
     )
 
+_storage_service: Optional[StorageService] = None
+
+
 def _get_storage_service() -> StorageService:
     global _storage_service
     if _storage_service is None:
