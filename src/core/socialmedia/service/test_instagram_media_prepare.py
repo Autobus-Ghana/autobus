@@ -16,11 +16,14 @@ from core.socialmedia.service.instagram_media_prepare import (
     InstagramMediaPrepareService,
     STORY_RATIO,
     encode_jpeg,
+    ensure_tiktok_frame_rate,
     fit_image_for_instagram,
     image_bytes_to_instagram_jpeg,
     is_prepared_public_url,
+    parse_frame_rate,
     parse_http_byte_range,
     select_instagram_media_urls,
+    tiktok_frame_rate_needs_correction,
 )
 
 
@@ -227,6 +230,82 @@ class PostizPayloadTests(unittest.TestCase):
         with self.assertRaises(InstagramMediaPrepareError) as caught:
             service.prepare_postiz_payload(payload)
         self.assertIn("device", str(caught.exception).lower())
+
+
+class TikTokFrameRateTest(unittest.TestCase):
+    def test_parse_fractional_and_plain_rates(self):
+        self.assertAlmostEqual(parse_frame_rate("30000/1001") or 0, 29.97, places=2)
+        self.assertEqual(parse_frame_rate("30/1"), 30)
+        self.assertEqual(parse_frame_rate("24"), 24)
+        self.assertIsNone(parse_frame_rate("0/0"))
+        self.assertIsNone(parse_frame_rate("N/A"))
+        self.assertIsNone(parse_frame_rate(""))
+
+    def test_valid_constant_rates_are_kept(self):
+        self.assertFalse(tiktok_frame_rate_needs_correction(30, 30))
+        self.assertFalse(tiktok_frame_rate_needs_correction(23.976, 23.976))
+        self.assertFalse(tiktok_frame_rate_needs_correction(60, 60))
+        self.assertFalse(tiktok_frame_rate_needs_correction(None, None))
+
+    def test_out_of_range_and_variable_rates_are_corrected(self):
+        self.assertTrue(tiktok_frame_rate_needs_correction(15, 15))
+        self.assertTrue(tiktok_frame_rate_needs_correction(120, 120))
+        self.assertTrue(tiktok_frame_rate_needs_correction(30, 120))
+
+    def test_invalid_rate_is_reencoded_before_upload(self):
+        source = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+        storage = FakeStorage()
+        service = InstagramMediaPrepareService(storage=storage)
+
+        def fake_run(command, **kwargs):
+            dest = command[-1]
+            with open(dest, "wb") as handle:
+                handle.write(b"constant-30fps" + b"\x00" * 32)
+
+            class Result:
+                returncode = 0
+                stderr = ""
+                stdout = ""
+
+            return Result()
+
+        with patch(
+            "core.socialmedia.service.instagram_media_prepare.shutil.which",
+            side_effect=lambda name: name,
+        ), patch(
+            "core.socialmedia.service.instagram_media_prepare._probe_frame_rates",
+            return_value=(120.0, 120.0),
+        ), patch(
+            "core.socialmedia.service.instagram_media_prepare.subprocess.run",
+            side_effect=fake_run,
+        ), patch(
+            "core.socialmedia.service.instagram_media_prepare._download",
+            return_value=(source, "video/mp4"),
+        ), patch.dict(os.environ, {"AUTOBUS_PUBLIC_API_URL": "https://api.useautobus.com"}):
+            out = ensure_tiktok_frame_rate(source)
+            self.assertTrue(out.startswith(b"constant-30fps"))
+            public = service.prepare_url(
+                "https://files.example/slowmo.mp4",
+                crop="none",
+                require_video=True,
+            )
+        self.assertTrue(public.endswith(".mp4"))
+        self.assertTrue(next(iter(storage.files.values())).startswith(b"constant-30fps"))
+
+    def test_valid_rate_is_uploaded_unchanged(self):
+        source = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+        with patch(
+            "core.socialmedia.service.instagram_media_prepare.shutil.which",
+            side_effect=lambda name: name,
+        ), patch(
+            "core.socialmedia.service.instagram_media_prepare._probe_frame_rates",
+            return_value=(30.0, 30.0),
+        ), patch(
+            "core.socialmedia.service.instagram_media_prepare.subprocess.run",
+        ) as run:
+            out = ensure_tiktok_frame_rate(source)
+        self.assertEqual(out, source)
+        run.assert_not_called()
 
 
 class ParseHttpByteRangeTest(unittest.TestCase):

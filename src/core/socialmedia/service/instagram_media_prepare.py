@@ -17,6 +17,9 @@ import copy
 import io
 import logging
 import os
+import shutil
+import subprocess
+import tempfile
 import uuid
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 from urllib.parse import urlparse
@@ -42,6 +45,12 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"}
 INSTAGRAM_TYPES = {"instagram", "instagram-standalone"}
 PUBLIC_MEDIA_PATH = "/api/v1/social/media/public/"
+# TikTok Direct Post rejects anything outside this window ("video frame rate is invalid").
+TIKTOK_MIN_FPS = 23.0
+TIKTOK_MAX_FPS = 60.0
+TIKTOK_TARGET_FPS = 30
+_FPS_PROBE_TIMEOUT = 30
+_FPS_TRANSCODE_TIMEOUT = 300
 
 
 class InstagramMediaPrepareError(RuntimeError):
@@ -312,6 +321,167 @@ def _download(url: str) -> Tuple[bytes, str]:
     return data, content_type
 
 
+def parse_frame_rate(value: Optional[str]) -> Optional[float]:
+    """Parse an ffprobe rate such as ``30000/1001`` or ``30``."""
+    raw = (value or "").strip()
+    if not raw or raw.upper() in {"N/A", "0/0"}:
+        return None
+    if "/" in raw:
+        num_s, den_s = raw.split("/", 1)
+        try:
+            den = float(den_s)
+            if den == 0:
+                return None
+            rate = float(num_s) / den
+        except ValueError:
+            return None
+    else:
+        try:
+            rate = float(raw)
+        except ValueError:
+            return None
+    return rate if rate > 0 else None
+
+
+def tiktok_frame_rate_needs_correction(
+    avg_fps: Optional[float],
+    stream_fps: Optional[float],
+) -> bool:
+    """True when TikTok would reject the clip, or the rate is variable.
+
+    A constant 24, 30, or 60 fps file is left alone. Rates under 23 or over 60,
+    and clips whose average and stream rates disagree, are re-encoded.
+    """
+    known = [rate for rate in (avg_fps, stream_fps) if rate is not None and rate > 0]
+    if not known:
+        return False
+    if any(rate < TIKTOK_MIN_FPS or rate > TIKTOK_MAX_FPS for rate in known):
+        return True
+    if (
+        avg_fps is not None
+        and stream_fps is not None
+        and abs(avg_fps - stream_fps) > 1.0
+    ):
+        return True
+    return False
+
+
+def _probe_frame_rates(ffprobe: str, path: str) -> Tuple[Optional[float], Optional[float]]:
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate,r_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=_FPS_PROBE_TIMEOUT,
+        check=False,
+    )
+    avg: Optional[float] = None
+    stream: Optional[float] = None
+    for line in (result.stdout or "").splitlines():
+        key, _, value = line.partition("=")
+        if key == "avg_frame_rate":
+            avg = parse_frame_rate(value)
+        elif key == "r_frame_rate":
+            stream = parse_frame_rate(value)
+    return avg, stream
+
+
+def _transcode_constant_fps(ffmpeg: str, source: str, dest: str, fps: int) -> None:
+    command = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        source,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-vf",
+        f"fps={fps},format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        dest,
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=_FPS_TRANSCODE_TIMEOUT,
+        check=False,
+    )
+    if result.returncode != 0 or not os.path.isfile(dest) or os.path.getsize(dest) < 32:
+        detail = (result.stderr or result.stdout or "ffmpeg failed").strip()[:400]
+        logger.warning("[TikTok media] frame-rate convert failed: %s", detail)
+        raise InstagramMediaPrepareError(
+            "This video's frame rate isn't one TikTok accepts (23–60 fps), "
+            "and we couldn't convert it. Try another video."
+        )
+
+
+def ensure_tiktok_frame_rate(data: bytes) -> bytes:
+    """Re-encode to a constant 30 fps when the source would fail TikTok's check."""
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        logger.warning("[TikTok media] ffmpeg/ffprobe missing; posting video without a frame-rate check")
+        return data
+    with tempfile.TemporaryDirectory(prefix="tiktok-fps-") as tmp:
+        source = os.path.join(tmp, "in.mp4")
+        dest = os.path.join(tmp, "out.mp4")
+        with open(source, "wb") as handle:
+            handle.write(data)
+        try:
+            avg_fps, stream_fps = _probe_frame_rates(ffprobe, source)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning("[TikTok media] frame-rate probe failed: %s", exc)
+            return data
+        if not tiktok_frame_rate_needs_correction(avg_fps, stream_fps):
+            logger.info(
+                "[TikTok media] frame rate ok avg=%s stream=%s",
+                avg_fps,
+                stream_fps,
+            )
+            return data
+        logger.info(
+            "[TikTok media] frame rate invalid avg=%s stream=%s; re-encoding at %s fps",
+            avg_fps,
+            stream_fps,
+            TIKTOK_TARGET_FPS,
+        )
+        try:
+            _transcode_constant_fps(ffmpeg, source, dest, TIKTOK_TARGET_FPS)
+        except subprocess.TimeoutExpired as exc:
+            raise InstagramMediaPrepareError(
+                "This video's frame rate isn't one TikTok accepts (23–60 fps), "
+                "and converting it took too long. Try a shorter video."
+            ) from exc
+        with open(dest, "rb") as handle:
+            return handle.read()
+
+
 def payload_has_attached_media(payload: Dict[str, Any]) -> bool:
     """True when a Postiz payload includes any media path, even a local blob URL."""
     posts = payload.get("posts")
@@ -399,6 +569,8 @@ class InstagramMediaPrepareService:
                 logger.info("[IG media] Prepared image %s -> %s (%s bytes)", source[:80], public, len(jpeg))
                 return public
 
+        if require_video:
+            data = ensure_tiktok_frame_rate(data)
         file_name = f"{uuid.uuid4()}.mp4"
         public = self._upload(data, file_name, ctype if ctype.startswith("video/") else "video/mp4")
         self._cache[cache_key] = public
