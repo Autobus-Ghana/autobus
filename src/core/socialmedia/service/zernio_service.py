@@ -10,6 +10,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -37,6 +38,7 @@ from core.socialmedia.service.zernio_mapping import (
     integration_row,
     post_id_from_create,
     publish_status_for_ui,
+    recent_rows_from_zernio_posts,
     verify_webhook_signature,
 )
 from core.credits.model.credit_types import CreditType
@@ -408,6 +410,51 @@ def disconnect_account(db: Session, user_id: str, local_or_remote_id: str) -> bo
     row.publishing_enabled = False
     db.commit()
     return True
+
+
+def _calendar_day(value: Optional[str], *, fallback: datetime) -> str:
+    raw = (value or "").strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw) if raw else fallback
+    except ValueError:
+        parsed = fallback
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).date().isoformat()
+
+
+def list_recent_post_rows(
+    db: Session,
+    user_id: str,
+    *,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Recent Zernio posts for this customer, shaped for the marketing recent-posts screen."""
+    if not zernio_enabled():
+        return []
+    profile = db.query(ZernioProfile).filter(ZernioProfile.user_id == user_id).first()
+    if profile is None or not (profile.zernio_profile_id or "").strip():
+        return []
+    now = datetime.now(timezone.utc)
+    date_from = _calendar_day(start_date, fallback=now - timedelta(days=14))
+    date_to = _calendar_day(end_date, fallback=now)
+    owned = [row.zernio_account_id for row in list_accounts(db, user_id)]
+    client = _client()
+    try:
+        posts = client.list_posts(
+            profile.zernio_profile_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except ZernioAPIError as exc:
+        if exc.status_code != 400:
+            raise
+        logger.info("[ZERNIO] list posts rejected the filters (%s); retrying without them", exc)
+        posts = client.list_posts(profile.zernio_profile_id, summary=False)
+    return recent_rows_from_zernio_posts(posts, owned_account_ids=owned)
 
 
 def publish_targets(

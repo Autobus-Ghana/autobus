@@ -10,7 +10,9 @@ from core.socialmedia.service.zernio_mapping import (
     connect_scopes,
     creator_info_for_ui,
     inbox_message_parts,
+    app_post_state,
     publish_status_for_ui,
+    recent_rows_from_zernio_posts,
     remote_account_active,
     should_retry_zernio,
     verify_webhook_signature,
@@ -19,6 +21,52 @@ from core.socialmedia.service.zernio_mapping import (
     ZERNIO_MARKETING_PLATFORMS,
     ZERNIO_PLATFORMS,
 )
+
+
+class RecentPostRowsTests(unittest.TestCase):
+    def test_splits_a_post_into_one_row_per_platform(self):
+        rows = recent_rows_from_zernio_posts(
+            [
+                {
+                    "_id": "post_1",
+                    "content": "Launch day",
+                    "status": "published",
+                    "createdAt": "2026-11-20T10:00:00Z",
+                    "platforms": [
+                        {
+                            "platform": "instagram",
+                            "accountId": "ig_1",
+                            "username": "shop",
+                            "status": "published",
+                            "platformPostUrl": "https://instagram.com/p/abc",
+                        },
+                        {
+                            "platform": "facebook",
+                            "accountId": "fb_1",
+                            "username": "Shop Page",
+                            "status": "failed",
+                            "errorMessage": "Page not connected",
+                        },
+                        {
+                            "platform": "instagram",
+                            "accountId": "someone_else",
+                            "status": "published",
+                        },
+                    ],
+                }
+            ],
+            owned_account_ids=["ig_1", "fb_1"],
+        )
+        self.assertEqual([row["integration"]["identifier"] for row in rows], ["instagram", "facebook"])
+        self.assertEqual(rows[0]["state"], "PUBLISHED")
+        self.assertEqual(rows[0]["releaseURL"], "https://instagram.com/p/abc")
+        self.assertEqual(rows[0]["content"], "Launch day")
+        self.assertEqual(rows[1]["state"], "FAILED")
+        self.assertEqual(rows[1]["error"], "Page not connected")
+
+    def test_pending_stays_processing(self):
+        self.assertEqual(app_post_state("pending"), "PROCESSING")
+        self.assertEqual(app_post_state("scheduled"), "SCHEDULED")
 
 
 class ZernioMappingTests(unittest.TestCase):

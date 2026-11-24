@@ -347,3 +347,53 @@ async def publish_marketing_posts(
         publish_ids = extract_publish_ids(created)
     result["tiktok_publish_ids"] = publish_ids
     return result
+
+
+def _postiz_rows(payload: Any) -> List[Any]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return [payload]
+    return []
+
+
+async def list_recent_marketing_posts(
+    db: Session,
+    user_id: str,
+    *,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> List[Any]:
+    """Recent posts for the marketing screen.
+
+    TikTok and YouTube come from Postiz. Facebook and Instagram come from Zernio.
+    A missing provider returns nothing from that side instead of hiding the other.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from core.socialmedia.service.zernio_client import ZernioAPIError
+    from core.socialmedia.service.zernio_service import list_recent_post_rows
+
+    now = datetime.now(timezone.utc)
+    start = (start_date or "").strip() or (now - timedelta(days=14)).isoformat().replace("+00:00", "Z")
+    end = (end_date or "").strip() or (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+
+    rows: List[Any] = []
+    base_url = postiz_base_url()
+    api_key = resolve_postiz_api_key(user_id, db)
+    if base_url and api_key:
+        try:
+            payload = await PostizClient(base_url).list_posts(api_key, start_date=start, end_date=end)
+            rows.extend(_postiz_rows(payload))
+        except PostizAPIError as exc:
+            logger.warning("[SOCIAL] Postiz list posts failed: %s", exc)
+    else:
+        logger.info("[SOCIAL] Skipping Postiz recent posts; no API key for this customer")
+
+    try:
+        rows.extend(
+            list_recent_post_rows(db, user_id, start_date=start, end_date=end)
+        )
+    except ZernioAPIError as exc:
+        logger.warning("[SOCIAL] Zernio list posts failed: %s", exc)
+    return rows

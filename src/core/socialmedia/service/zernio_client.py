@@ -193,6 +193,30 @@ class ZernioClient:
     def get_post(self, post_id: str) -> Dict[str, Any]:
         return self.request("GET", f"/posts/{post_id}")
 
+    def list_posts(
+        self,
+        profile_id: str,
+        *,
+        date_from: str = "",
+        date_to: str = "",
+        limit: int = 100,
+        summary: bool = True,
+    ) -> list:
+        """Posts for one customer profile. ``profile_id`` is required so other customers stay out."""
+        params: Dict[str, Any] = {
+            "profileId": profile_id,
+            "limit": max(1, min(100, limit)),
+        }
+        if summary:
+            params["view"] = "summary"
+        if date_from:
+            params["dateFrom"] = date_from
+        if date_to:
+            params["dateTo"] = date_to
+        body = self.request("GET", "/posts", params=params)
+        posts = body.get("posts") or body.get("data") or []
+        return posts if isinstance(posts, list) else []
+
     def tiktok_creator_info(self, account_id: str, *, media_type: str = "video") -> Dict[str, Any]:
         return self.request(
             "GET",

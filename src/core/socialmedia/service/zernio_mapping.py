@@ -377,6 +377,70 @@ def publish_status_for_ui(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def app_post_state(status: Any) -> str:
+    """Map a Zernio status onto the words the Autobus app already understands."""
+    raw = _first_str(status).lower().replace("-", "_")
+    if raw in {"published", "publish_complete", "success", "posted"}:
+        return "PUBLISHED"
+    if raw in {"failed", "error", "cancelled", "canceled"}:
+        return "FAILED"
+    if raw in {"scheduled", "queue", "queued"}:
+        return "SCHEDULED"
+    return "PROCESSING"
+
+
+def recent_rows_from_zernio_posts(
+    posts: Iterable[Dict[str, Any]],
+    *,
+    owned_account_ids: Optional[Iterable[str]] = None,
+) -> List[Dict[str, Any]]:
+    """One app row per platform on a Zernio post.
+
+    The marketing screen reads ``integration.identifier``, ``state``, ``content``,
+    and ``releaseURL``. Rows for accounts this customer does not own are dropped.
+    """
+    owned = {item.strip() for item in (owned_account_ids or []) if str(item).strip()}
+    rows: List[Dict[str, Any]] = []
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        content = _first_str(post.get("content"), post.get("title"))
+        created = _first_str(post.get("createdAt"), post.get("scheduledFor"))
+        post_id = _first_str(post.get("_id"), post.get("id"))
+        platforms = post.get("platforms") if isinstance(post.get("platforms"), list) else []
+        targets = [item for item in platforms if isinstance(item, dict)] or [{}]
+        for item in targets:
+            account_id = zernio_id(item.get("accountId"))
+            if owned and account_id and account_id not in owned:
+                continue
+            platform = _first_str(item.get("platform"), post.get("platform")) or "other"
+            state = app_post_state(item.get("status") or post.get("status"))
+            when = _first_str(
+                item.get("publishedAt"),
+                item.get("scheduledFor"),
+                post.get("scheduledFor"),
+                created,
+            )
+            username = _first_str(item.get("username"), item.get("displayName"))
+            rows.append(
+                {
+                    "id": ":".join(part for part in (post_id, platform, account_id) if part),
+                    "content": content,
+                    "publishDate": when,
+                    "state": state,
+                    "status": state,
+                    "releaseURL": _first_str(item.get("platformPostUrl"), item.get("releaseURL")),
+                    "error": _first_str(item.get("errorMessage"), item.get("error")),
+                    "integration": {
+                        "id": account_id,
+                        "identifier": platform,
+                        "name": username or platform,
+                    },
+                }
+            )
+    return rows
+
+
 def post_id_from_create(payload: Dict[str, Any]) -> str:
     post = _as_dict(payload.get("post"))
     return _first_str(post.get("_id"), post.get("id"), payload.get("postId"), payload.get("post_id"))

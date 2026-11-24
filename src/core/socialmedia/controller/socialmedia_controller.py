@@ -39,6 +39,7 @@ from core.socialmedia.service.postiz_native import (
     classify_marketing_posts,
     delete_native_integration,
     list_native_integrations,
+    list_recent_marketing_posts,
     login_credentials as postiz_login_credentials,
     postiz_base_url,
     publish_marketing_posts,
@@ -811,8 +812,14 @@ async def postiz_list_posts(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
 ):
-    """Recent posts. Publishing now goes through Zernio, which has no list endpoint here."""
-    return []
+    """Recent posts for Digital Marketing. TikTok and YouTube come from Postiz; the rest from Zernio."""
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    return await list_recent_marketing_posts(
+        db,
+        internal_user_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 @social_routes.delete("/postiz/integrations/{integration_id}")
 async def postiz_delete_integration(
